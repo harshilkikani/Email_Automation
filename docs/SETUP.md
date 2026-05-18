@@ -5,10 +5,22 @@
 - pnpm 9+
 - Postgres 15+ (locally via Docker or any reachable instance)
 
+## What ships in the repo vs. what each developer brings
+
+The `.gitignore` deliberately excludes three categories of files. Nothing is missing — each category has its own way of being supplied:
+
+| Category | Examples | How a new collaborator gets them |
+|---|---|---|
+| **Regenerated from lockfile** | `node_modules/`, `dist/`, `.vite/`, `coverage/`, `*.log`, `.cache/` | `pnpm install` and (if needed) `pnpm build`. `pnpm-lock.yaml` IS committed so versions are deterministic. |
+| **Secrets (per-developer)** | `.env`, `.env.local`, AWS / Postmark / Bouncer / Hunter keys | Each developer copies `.env.example` → `.env` and fills in *their own* values. **Never commit a real `.env`.** For shared production credentials use Fly.io secrets / 1Password / `gh secret set` — see step 3 below. |
+| **Per-machine / IDE** | `.vscode/`, `.idea/`, `.claude/`, `.DS_Store`, `Thumbs.db`, `data/` | Each developer sets these up locally as they wish. Local working data like downloaded license CSVs lives under `data/`. |
+
 ## Step-by-step
 
 ### 1. Clone & install
 ```bash
+git clone https://github.com/harshilkikani/keres-ai.git
+cd keres-ai
 pnpm install
 ```
 
@@ -23,14 +35,27 @@ For production, sign up for [Neon](https://neon.tech) — the free tier (0.5 GB 
 ### 3. Environment
 ```bash
 cp .env.example .env
+
+# generate your OWN strong secrets (don't reuse anyone else's):
+openssl rand -hex 24      # paste into AUTH_TOKEN
+openssl rand -hex 24      # paste into AUTH_COOKIE_SECRET
 ```
 
 Edit `.env`:
-- `DATABASE_URL` — already set to the docker container default; change if your Postgres is elsewhere
-- `AUTH_TOKEN` — set to a long random string. This is your sign-in password.
-- `AUTH_COOKIE_SECRET` — another long random string. Used to sign session cookies and unsubscribe tokens.
+- `DATABASE_URL` — already set to the docker container default; change if your Postgres is elsewhere.
+- `AUTH_TOKEN` — your sign-in password. Long random string.
+- `AUTH_COOKIE_SECRET` — signs session cookies + unsubscribe tokens. Long random string.
 - `ORG_NAME`, `FROM_NAME`, `FROM_EMAIL`, `REPLY_TO`, `PHYSICAL_ADDRESS`, `OUTREACH_SUBDOMAIN`, `DEFAULT_BOOKING_LINK` — your sender identity.
 - Provider toggles (`ENABLE_OSM` etc.) — leave default; flip to `true` only after you have credentials.
+
+#### Sharing credentials with the team
+
+`.env` is gitignored and must never be committed. For team-shared values:
+- **Production (Fly.io)**: `flyctl secrets set ENABLE_SES=true SES_REGION=us-east-1 ...`
+- **CI (GitHub Actions)**: `gh secret set DATABASE_URL --body "$value"`
+- **Between teammates**: use 1Password / Bitwarden / AWS Secrets Manager. Never paste secrets in Slack or commit them.
+
+If a real secret ever lands in a commit, rotate it immediately — git history is permanent on public repos.
 
 ### 4. Migrate
 ```bash
