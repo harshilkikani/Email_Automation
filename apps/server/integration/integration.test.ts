@@ -66,7 +66,11 @@ afterAll(async () => { if (app) await app.close(); });
 function bearer() { return { authorization: `Bearer ${process.env.AUTH_TOKEN}` }; }
 
 async function inject(method: any, url: string, body?: any) {
-  return app!.inject({ method, url, headers: { ...bearer(), 'content-type': 'application/json' }, payload: body });
+  /* Only set content-type when we actually have a JSON payload — otherwise
+     Fastify's JSON parser rejects "empty body but Content-Type: application/json". */
+  const headers: Record<string, string> = { ...bearer() };
+  if (body !== undefined) headers['content-type'] = 'application/json';
+  return app!.inject({ method, url, headers, payload: body });
 }
 
 describe('integration: Keres AI end-to-end', () => {
@@ -79,8 +83,14 @@ describe('integration: Keres AI end-to-end', () => {
   });
 
   it.runIf(pgReachable)('auth: rejects bad token, accepts good', async () => {
+    /* The bad-token attempt registers an IP-backoff penalty that would 429 the
+       follow-up good-token attempt. Reset before the good-token check so we
+       test the auth logic in isolation, not the rate-limit interaction (which
+       has its own coverage). */
+    const { resetAuthBackoff } = await import('../src/auth.js');
     const bad = await app!.inject({ method: 'POST', url: '/api/auth/login', payload: { token: 'nope' }, headers: { 'content-type': 'application/json' } });
     expect(bad.statusCode).toBe(401);
+    resetAuthBackoff();
     const ok = await app!.inject({ method: 'POST', url: '/api/auth/login', payload: { token: process.env.AUTH_TOKEN }, headers: { 'content-type': 'application/json' } });
     expect(ok.statusCode).toBe(200);
   });
@@ -198,15 +208,21 @@ describe('integration: Keres AI end-to-end', () => {
     expect(blockedJson.ok).toBe(false);
     expect(blockedJson.gate.checks.some((c: any) => c.code === 'ses_production_access' && c.state === 'fail')).toBe(true);
 
-    /* Flip production access on; the seedlist test gate still blocks until a
-       successful seedlist send. Send one. */
+    /* Flip production access on + run a seedlist test so the per-campaign
+       gates clear. `sample_mode_off` will still fail (SAMPLE_MODE=true is the
+       whole point of integration testing), so we exercise the explicit
+       operator-override path and verify the audit log records it. */
     await inject('PUT', '/api/settings', { productionAccessConfirmed: true });
     await inject('POST', `/api/sender-domains/${senderDomainId}/test-send`, {});
 
     const gate2 = await inject('GET', `/api/campaigns/${campaignId}/launch-gate`);
     expect(gate2.json().gate.checks.some((c: any) => c.code === 'seedlist_test_recent' && c.state === 'pass')).toBe(true);
 
-    const launched = await inject('POST', `/api/campaigns/${campaignId}/launch`);
+    /* Launch via operator override (acknowledging SAMPLE_MODE) — this is the
+       documented path for the integration / sample-mode flow. */
+    const launched = await inject('POST', `/api/campaigns/${campaignId}/launch`, {
+      override: { reason: 'Integration test — sample mode, MockOutbound in use' },
+    });
     expect(launched.statusCode).toBe(200);
     expect(launched.json().ok).toBe(true);
   });
