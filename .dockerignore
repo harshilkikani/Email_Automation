@@ -1,0 +1,17 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.github
+.vscode
+.idea
+.env
+.env.*
+*.log
+coverage
+.pnpm-store
+apps/web/dist
+docs/_assets
+.DS_Store
+.claude
+data

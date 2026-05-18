@@ -1,0 +1,26 @@
+{
+  "name": "@keres/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./scoring": "./src/scoring.ts",
+    "./dedupe": "./src/dedupe.ts",
+    "./templates": "./src/templates.ts",
+    "./validation": "./src/validation.ts",
+    "./budget": "./src/budget.ts",
+    "./filters": "./src/filters.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "google-libphonenumber": "^3.2.34"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

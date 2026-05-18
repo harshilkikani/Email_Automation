@@ -1,0 +1,41 @@
+{
+  "name": "@keres/providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./osm": "./src/osm.ts",
+    "./yelp": "./src/yelp.ts",
+    "./noaa": "./src/noaa.ts",
+    "./census": "./src/census.ts",
+    "./licenses": "./src/licenses/index.ts",
+    "./hunter": "./src/hunter.ts",
+    "./bouncer": "./src/bouncer.ts",
+    "./ses": "./src/ses.ts",
+    "./inbound": "./src/inbound.ts",
+    "./scraper": "./src/scraper.ts",
+    "./phone": "./src/phone.ts",
+    "./verify": "./src/verify.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ses": "^3.620.0",
+    "@aws-sdk/client-sesv2": "^3.620.0",
+    "@aws-sdk/client-sns": "^3.620.0",
+    "@keres/core": "workspace:*",
+    "cheerio": "^1.0.0-rc.12",
+    "google-libphonenumber": "^3.2.34",
+    "undici": "^6.19.5"
+  },
+  "devDependencies": {
+    "@types/google-libphonenumber": "^7.4.30",
+    "@types/node-forge": "^1.3.11",
+    "node-forge": "^1.3.1",
+    "typescript": "^5.5.4"
+  }
+}

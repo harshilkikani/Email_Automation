@@ -1,0 +1,30 @@
+# dependencies + build
+node_modules
+dist
+build
+.vite
+.pnpm-store
+
+# tests + coverage
+coverage
+
+# secrets + envs (NEVER commit; .env.example is the template)
+.env
+.env.local
+.env.*.local
+
+# OS / editor / agent
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+.claude
+
+# logs + caches
+*.log
+.cache
+
+# misc
+*.tgz
+*.tar.gz
+data/
