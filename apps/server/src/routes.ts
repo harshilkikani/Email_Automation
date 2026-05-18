@@ -2,21 +2,20 @@
  * All HTTP route handlers. Kept in one file to keep the router boot order
  * obvious. Each handler is small and delegates to a service in `./services`.
  */
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { and, eq, desc, sql, isNull, gte, inArray } from 'drizzle-orm';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { getDb } from '@keres/db';
 import { schema } from '@keres/db';
 import {
   scoreLead, SCORING_VERSION_V1, hardFilter,
-  emailIntakeFilter, isRoleEmail,
-  computeLift, type LiftRow, ALL_NICHES,
+  ALL_NICHES,
 } from '@keres/core';
 import { classifyPhone } from '@keres/providers';
 import { getConfig } from './config.js';
 import { runDiscovery } from './services/discovery.js';
 import {
-  createCampaign, buildRecipients, renderPreview, gateCampaign, resolveAudience,
+  createCampaign, buildRecipients, renderPreview,
 } from './services/campaigns.js';
 import { sendBatch } from './services/sender-pipeline.js';
 import { handleSesSns, handleInboundReply } from './services/inbound-handler.js';

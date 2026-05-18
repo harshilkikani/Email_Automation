@@ -10,7 +10,6 @@
 import { eq, and, sql } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
-import { evaluateLaunchGate } from './launch-gate.js';
 import { runDiagnostics } from './diagnostics.js';
 import { getConfig } from '../config.js';
 

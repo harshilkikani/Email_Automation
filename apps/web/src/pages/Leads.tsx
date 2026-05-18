@@ -51,7 +51,7 @@ export default function Leads() {
     const r = await api.get(`/leads?${q}`);
     if (r.ok && r.data) setRows(r.data.rows);
   };
-  useEffect(() => { refresh(); /* eslint-disable-next-line */ }, [status, niche]);
+  useEffect(() => { refresh();   }, [status, niche]);
 
   const filtered = useMemo(() => rows.filter(r => {
     if (!search) return true;

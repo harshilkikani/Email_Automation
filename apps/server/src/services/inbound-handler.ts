@@ -1,13 +1,12 @@
 /**
  * Inbound webhook handler — both SES SNS and Postmark Inbound funnel here.
  */
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import { classifyReply } from '@keres/core';
 import { parseSnsNotification, shouldAutoSuppress } from '@keres/providers';
 import type { InboundEvent } from '@keres/providers';
-import { getConfig } from '../config.js';
 
 /** Persist an SES SNS notification batch. Returns counts for the test harness. */
 export async function handleSesSns(db: Database, orgId: string, body: any): Promise<{ subscribed: boolean; events: number; suppressed: number; subscribeUrl?: string }> {
@@ -27,7 +26,7 @@ export async function handleSesSns(db: Database, orgId: string, body: any): Prom
       .limit(1))[0] ?? null;
 
     /* Idempotent insert. */
-    const inserted = await db.insert(schema.emailEvents).values({
+    await db.insert(schema.emailEvents).values({
       orgId,
       eventType: ev.eventType,
       providerMessageId: ev.providerMessageId,

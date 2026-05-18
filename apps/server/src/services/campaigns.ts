@@ -2,14 +2,14 @@
  * Campaign service: render preview, launch (queue recipients), pause/resume,
  * suppression-aware recipient resolution, validation-stratified builder.
  */
-import { and, eq, isNull, inArray, sql, gte, lte } from 'drizzle-orm';
+import { and, eq, isNull, inArray, sql, gte } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import {
   bucketFor, REACH_SAMPLE, ENGAGEMENT_SAMPLE, stratifiedSample,
   defaultTemplateFor, renderEmail, TEMPLATES, type Template,
 } from '@keres/core';
-import { finalRender, lintEmail, highestSeverity } from '@keres/email';
+import { finalRender, lintEmail } from '@keres/email';
 import { getConfig } from '../config.js';
 import { canSend, type GateInput, type GateResult } from './gates.js';
 

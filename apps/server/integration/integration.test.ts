@@ -48,7 +48,7 @@ let app: FastifyInstance | null = null;
 
 beforeAll(async () => {
   if (!pgReachable) {
-    /* eslint-disable-next-line no-console */
+     
     console.warn(`[integration] SKIPPING — Postgres unreachable. ${skipReason}`);
     return;
   }
@@ -333,7 +333,7 @@ describe('integration: Keres AI end-to-end', () => {
 
   it('reports the skip reason when Postgres is unreachable', () => {
     if (!pgReachable) {
-      // eslint-disable-next-line no-console
+       
       console.warn(`[integration] DB unreachable. ${skipReason}`);
     }
     expect(true).toBe(true);

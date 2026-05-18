@@ -2,7 +2,7 @@
  * Seed script: creates the single organization, a sender domain, and one
  * scoring_versions row. Idempotent — safe to run multiple times.
  */
-import { getDb, getDbWithClose } from '@keres/db';
+import { getDbWithClose } from '@keres/db';
 import { schema } from '@keres/db';
 import { DEFAULT_WEIGHTS_V1, SCORING_VERSION_V1 } from '@keres/core';
 import { eq } from 'drizzle-orm';

@@ -6,7 +6,7 @@
  * It is intentionally a simple polling loop (not a separate worker process)
  * so the v3.1 single-Fly-machine architecture works without Upstash/BullMQ.
  */
-import { and, eq, sql, asc, lt, isNull, inArray } from 'drizzle-orm';
+import { and, eq, sql, asc } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import { defaultTemplateFor, renderEmail, TEMPLATES, type Template } from '@keres/core';

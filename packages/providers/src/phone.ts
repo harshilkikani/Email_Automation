@@ -7,7 +7,6 @@ import type { PhoneLineType } from '@keres/core';
 
 const PNF = lpn.PhoneNumberFormat;
 const util = lpn.PhoneNumberUtil.getInstance();
-const PNT = (lpn as unknown as { PhoneNumberType: typeof import('google-libphonenumber').PhoneNumberType }).PhoneNumberType ?? null;
 
 export interface PhoneClassification {
   e164: string | null;

@@ -3,12 +3,12 @@
  * (TOS-compliant, no-store of display fields) → license lookup → free signal
  * extraction → deterministic scoring → insert leads + signals.
  */
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import {
   addToIndex, checkDuplicate, makeIndex, scoreLead, hardFilter,
-  type LeadCandidate, type Niche, type ScoringInputs, type WebPresenceLevel,
+  type Niche, type ScoringInputs, type WebPresenceLevel,
   SCORING_VERSION_V1,
 } from '@keres/core';
 import {

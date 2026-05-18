@@ -9,6 +9,7 @@
     "pnpm": ">=9"
   },
   "scripts": {
+    "postinstall": "node -e \"if(require('fs').existsSync('.git')){require('child_process').execSync('sh scripts/install-hooks.sh',{stdio:'inherit'})}\"",
     "build": "pnpm -r --filter=\"./packages/**\" run build && pnpm -r --filter=\"./apps/**\" run build",
     "dev": "concurrently -n server,web -c green,cyan \"pnpm --filter @keres/server dev\" \"pnpm --filter @keres/web dev\"",
     "test": "vitest run",
@@ -16,7 +17,7 @@
     "db:test": "vitest run --config vitest.integration.config.ts",
     "doctor": "tsx scripts/doctor.ts",
     "typecheck": "pnpm -r run typecheck",
-    "lint": "pnpm -r run lint",
+    "lint": "eslint .",
     "db:generate": "pnpm --filter @keres/db generate",
     "db:migrate": "pnpm --filter @keres/db migrate",
     "db:seed": "pnpm --filter @keres/server seed",
@@ -26,9 +27,11 @@
     "@types/node": "^20.12.0",
     "@types/pg": "^8.11.6",
     "concurrently": "^8.2.2",
+    "eslint": "^9.13.0",
     "pg": "^8.12.0",
     "tsx": "^4.16.5",
     "typescript": "^5.5.4",
+    "typescript-eslint": "^8.16.0",
     "undici": "^6.19.5",
     "vitest": "^1.6.0"
   },

@@ -13,10 +13,6 @@ interface Diag {
   gate: { ok: boolean; checks: Array<{ code: string; label: string; state: string; detail?: string; fix?: string; docs?: string }>; blockingCount: number; warningCount: number };
 }
 
-function tileClass(s: string) {
-  return s === 'pass' ? 'pass' : s === 'fail' ? 'fail' : s === 'warn' ? 'warn' : '';
-}
-
 export default function Diagnostics() {
   const [d, setD] = useState<Diag | null>(null);
   const [busy, setBusy] = useState(false);

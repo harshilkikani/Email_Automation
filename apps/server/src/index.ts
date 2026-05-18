@@ -19,7 +19,6 @@ import rateLimit from '@fastify/rate-limit';
 import { getConfig, validateConfig } from './config.js';
 import { registerAuth } from './auth.js';
 import { registerRoutes } from './routes.js';
-import { sendBatch } from './services/sender-pipeline.js';
 import { getDb } from '@keres/db';
 
 async function main() {
@@ -89,6 +88,29 @@ async function main() {
   registerAuth(app);
   registerRoutes(app);
 
+  /* Optional: serve the React SPA from the same process. Useful for single-machine
+     Fly deployments where you don't want a separate Cloudflare-Pages frontend. */
+  if (cfg.serveWeb) {
+    const fastifyStatic = (await import('@fastify/static')).default;
+    const path = await import('node:path');
+    const fs = await import('node:fs');
+    const root = cfg.webDistPath || path.resolve(process.cwd(), 'apps/web/dist');
+    if (!fs.existsSync(root)) {
+      app.log.warn({ root }, 'SERVE_WEB=true but web dist not found; run `pnpm --filter @keres/web build` first');
+    } else {
+      await app.register(fastifyStatic, { root, prefix: '/' });
+      /* SPA fallback: any non-/api/* path returns index.html so client-side routes work. */
+      app.setNotFoundHandler((req, reply) => {
+        if (req.url.startsWith('/api/')) {
+          reply.code(404).send({ ok: false, error: 'not_found' });
+        } else {
+          reply.type('text/html').sendFile('index.html');
+        }
+      });
+      app.log.info({ root }, 'serving web SPA from API process');
+    }
+  }
+
   /* Per-route rate limit decorators applied by setting a custom config. */
   app.addHook('onRoute', route => {
     /* Tight limit on the auth login: 6/min. */
@@ -109,19 +131,13 @@ async function main() {
     }
   });
 
-  /* In-process scheduler. Cloudflare Cron pings /api/health at 7am M-F to
-     wake the auto-stopped Fly machine. */
-  let timer: NodeJS.Timeout | null = null;
-  if (!cfg.sampleMode && cfg.ses.enabled) {
-    timer = setInterval(async () => {
-      try {
-        await sendBatch(getDb(), { maxToSend: 5 });
-      } catch (e) {
-        app.log.error({ err: e }, 'scheduler send tick failed');
-      }
-    }, 15_000);
-  }
-  app.addHook('onClose', async () => { if (timer) clearInterval(timer); });
+  /* In-process scheduler — drives discovery / sending / DNS / warmup ramp /
+     budget alerts. Disabled in SAMPLE_MODE so dev runs are click-driven.
+     Cloudflare Cron pings /api/health at 7am M–F to wake the auto-stopped
+     Fly machine; the scheduler catches up on due ticks on wake. */
+  const { startScheduler } = await import('./services/scheduler.js');
+  const scheduler = startScheduler(getDb(), app.log);
+  app.addHook('onClose', async () => scheduler.stop());
 
   await app.listen({ port: cfg.port, host: '0.0.0.0' });
   app.log.info(`Keres server listening on ${cfg.port} (sampleMode=${cfg.sampleMode}, ses=${cfg.ses.enabled})`);

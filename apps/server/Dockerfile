@@ -1,11 +1,9 @@
-# Multi-stage build for the Keres API server.
+# Multi-stage build — single Fly machine runs both the API and the SPA.
 #
-# Stage 1 — install + build all packages.
-# Stage 2 — copy only runtime artefacts into a slim image.
+# Stage 1 — install + build all packages including the web SPA.
+# Stage 2 — slim runtime with @fastify/static serving apps/web/dist on `/`.
 #
-# Note: we serve the API only from this image. The web SPA is built separately
-# and served either by Cloudflare Pages or by enabling `@fastify/static` on the
-# `apps/web/dist` output. Keeping them separate keeps the container small.
+# Behavior controlled by the SERVE_WEB env var (defaulted to `true` in this image).
 
 FROM node:20-alpine AS builder
 WORKDIR /repo
@@ -27,17 +25,22 @@ RUN pnpm --filter @keres/core build \
  && pnpm --filter @keres/db build \
  && pnpm --filter @keres/email build \
  && pnpm --filter @keres/providers build \
- && pnpm --filter @keres/server build
+ && pnpm --filter @keres/server build \
+ && pnpm --filter @keres/web build
 
 FROM node:20-alpine AS runner
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.7.0 --activate
 
 ENV NODE_ENV=production
+ENV SERVE_WEB=true
+ENV WEB_DIST_PATH=/app/apps/web/dist
 
 COPY --from=builder /repo/package.json /repo/pnpm-lock.yaml /repo/pnpm-workspace.yaml ./
 COPY --from=builder /repo/apps/server/package.json apps/server/
 COPY --from=builder /repo/apps/server/dist apps/server/dist
+COPY --from=builder /repo/apps/web/package.json apps/web/
+COPY --from=builder /repo/apps/web/dist apps/web/dist
 COPY --from=builder /repo/packages/core/package.json packages/core/
 COPY --from=builder /repo/packages/core/dist packages/core/dist
 COPY --from=builder /repo/packages/db/package.json packages/db/

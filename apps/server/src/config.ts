@@ -82,6 +82,10 @@ export interface KeresConfig {
   complaintPausePct: number;
   dailySendCapDefault: number;
   logLevel: string;
+
+  /** When true, the API process also serves the React SPA from `apps/web/dist`. */
+  serveWeb: boolean;
+  webDistPath: string;
 }
 
 let cached: Readonly<KeresConfig> | null = null;
@@ -148,6 +152,8 @@ export function getConfig(): Readonly<KeresConfig> {
     complaintPausePct: num('COMPLAINT_PAUSE_PCT', 0.1),
     dailySendCapDefault: num('DAILY_SEND_CAP_DEFAULT', 50),
     logLevel: str('LOG_LEVEL', 'info'),
+    serveWeb: bool('SERVE_WEB', false),
+    webDistPath: str('WEB_DIST_PATH', ''),
   };
   cached = Object.freeze(cfg);
   return cached;

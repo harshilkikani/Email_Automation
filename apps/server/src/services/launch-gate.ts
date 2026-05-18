@@ -7,7 +7,7 @@
  *
  * Order of checks is deterministic so the UI can render a stable list.
  */
-import { and, eq, sql, gte, isNull } from 'drizzle-orm';
+import { and, eq, sql, gte } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import { defaultTemplateFor, renderEmail, TEMPLATES } from '@keres/core';

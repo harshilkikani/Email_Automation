@@ -37,7 +37,6 @@ export function parseCsv(csv: string): StormEvent[] {
   const lines = csv.split(/\r?\n/);
   if (lines.length === 0) return [];
   const headers = (lines[0] ?? '').split(',').map(h => h.replace(/"/g, '').toLowerCase());
-  const idxState = headers.indexOf('state');
   const idxZ = headers.indexOf('zipcode');
   const idxType = headers.indexOf('event_type');
   const idxDate = headers.indexOf('begin_date_time');

@@ -4,7 +4,7 @@
  * DNS green, unsubscribe reachable, SES config, inbound webhook, budget
  * status, sample mode, last successful job.
  */
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, sql } from 'drizzle-orm';
 import { getDb, schema } from '@keres/db';
 import { getConfig } from '../config.js';
 import { evaluateLaunchGate, type LaunchGateReport } from './launch-gate.js';

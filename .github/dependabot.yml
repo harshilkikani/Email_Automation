@@ -1,0 +1,39 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: 'America/Chicago'
+    open-pull-requests-limit: 5
+    groups:
+      tooling:
+        patterns: ['typescript', 'tsx', 'vitest', 'eslint*', 'typescript-eslint', '@types/*']
+      drizzle:
+        patterns: ['drizzle*']
+      fastify:
+        patterns: ['fastify', '@fastify/*']
+      aws:
+        patterns: ['@aws-sdk/*']
+      react:
+        patterns: ['react', 'react-dom', 'react-router-dom', '@vitejs/plugin-react', 'vite']
+    commit-message:
+      prefix: 'deps'
+    labels: ['dependencies']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'ci'
+    labels: ['ci']
+  - package-ecosystem: docker
+    directory: /apps/server
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: 'docker'

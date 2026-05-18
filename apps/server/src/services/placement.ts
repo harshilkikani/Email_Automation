@@ -11,7 +11,7 @@
  * gate stays in `warn` rather than blocking, because the operator may not
  * have logged placement yet.
  */
-import { and, desc, eq, gte, isNotNull } from 'drizzle-orm';
+import { and, eq, gte } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 

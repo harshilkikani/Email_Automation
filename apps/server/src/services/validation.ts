@@ -5,12 +5,11 @@
  *  - build stratified validation campaign
  *  - compute current results vs kill-criteria
  */
-import { and, eq, sql, inArray } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import {
-  bucketFor, eyeballVerdict, reachVerdict, engagementVerdict,
-  REACH_SAMPLE, ENGAGEMENT_SAMPLE, stratifiedSample, computeLift,
+  eyeballVerdict, reachVerdict, engagementVerdict,
   type Niche, type Rating,
 } from '@keres/core';
 import { createCampaign, buildRecipients } from './campaigns.js';
