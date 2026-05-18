@@ -204,7 +204,7 @@ export async function renderPreview(db: Database, campaignId: string, leadId: st
       physicalAddress: org.physicalAddress ?? cfg.org.physicalAddress,
       orgName: org.name,
     },
-    signingSecret: cfg.authCookieSecret,
+    signingSecret: cfg.unsubscribeSigningSecret,
     messageId: `<preview-${campaignId}-${leadId}@${cfg.org.outreachSubdomain}>`,
   });
 

@@ -33,6 +33,14 @@ export interface KeresConfig {
   authToken: string;
   authCookieName: string;
   authCookieSecret: string;
+  /**
+   * Dedicated signing key for unsubscribe + seedlist tokens. Independent from
+   * the session cookie secret so compromise of one doesn't compromise the
+   * other. Falls back to `authCookieSecret` if unset (backwards-compatible).
+   */
+  unsubscribeSigningSecret: string;
+  /** Allowed CORS origins in production. Falls back to `publicBaseUrl`. */
+  corsOrigin: string[];
 
   databaseUrl: string;
   databaseDriver: 'node' | 'neon-serverless';
@@ -103,6 +111,8 @@ export function getConfig(): Readonly<KeresConfig> {
     authToken: str('AUTH_TOKEN', 'change-me'),
     authCookieName: str('AUTH_COOKIE_NAME', 'keres_session'),
     authCookieSecret: str('AUTH_COOKIE_SECRET', 'change-me-too'),
+    unsubscribeSigningSecret: str('UNSUBSCRIBE_SIGNING_SECRET') || str('AUTH_COOKIE_SECRET', 'change-me-too'),
+    corsOrigin: (str('CORS_ORIGIN') || '').split(',').map(s => s.trim()).filter(Boolean),
 
     databaseUrl: str('DATABASE_URL', ''),
     databaseDriver: (str('DATABASE_DRIVER', 'node') as KeresConfig['databaseDriver']),
@@ -196,7 +206,14 @@ export function validateConfig(cfg: Readonly<KeresConfig>): ValidationIssue[] {
     issues.push({
       severity: cfg.nodeEnv === 'production' ? 'error' : 'warn',
       code: 'cookie_secret_weak',
-      message: 'AUTH_COOKIE_SECRET is empty or weak (must be >= 32 chars; this also signs unsubscribe tokens).',
+      message: 'AUTH_COOKIE_SECRET is empty or weak (must be >= 32 chars).',
+    });
+  }
+  if (!cfg.unsubscribeSigningSecret || cfg.unsubscribeSigningSecret.length < 32) {
+    issues.push({
+      severity: cfg.nodeEnv === 'production' ? 'error' : 'warn',
+      code: 'unsub_secret_weak',
+      message: 'UNSUBSCRIBE_SIGNING_SECRET is empty or weak (must be >= 32 chars). If unset it falls back to AUTH_COOKIE_SECRET — separating the two is defense-in-depth.',
     });
   }
   if (cfg.nodeEnv === 'production' && cfg.sampleMode) {

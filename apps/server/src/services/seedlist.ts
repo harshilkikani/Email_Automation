@@ -56,7 +56,7 @@ export async function sendSeedlistTest(
 
     const token = signUnsubscribeToken(
       { email: to, scope: org.id, campaignId: undefined },
-      cfg.authCookieSecret,
+      cfg.unsubscribeSigningSecret,
     );
     const url = unsubscribeUrl(cfg.publicBaseUrl, token);
     const body = [

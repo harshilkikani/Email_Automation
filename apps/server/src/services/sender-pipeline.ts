@@ -85,7 +85,7 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
         physicalAddress: org.physicalAddress ?? cfg.org.physicalAddress,
         orgName: org.name,
       },
-      signingSecret: cfg.authCookieSecret,
+      signingSecret: cfg.unsubscribeSigningSecret,
       messageId: msgId,
     });
 

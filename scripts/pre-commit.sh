@@ -14,8 +14,9 @@ set -eu
 
 staged=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
 
-# 1. Never commit any .env file (except .env.example).
-bad_env=$(printf '%s\n' "$staged" | grep -E '(^|/)\.env(\.[^/]+)?$' | grep -v '^\.env\.example$' || true)
+# 1. Never commit any .env file. Allow templates ending in `.example`
+#    (e.g. `.env.example`, `.env.production.example`) — those are docs, not secrets.
+bad_env=$(printf '%s\n' "$staged" | grep -E '(^|/)\.env(\.[^/]+)?$' | grep -vE '\.example$' || true)
 if [ -n "$bad_env" ]; then
   echo "✕ Refusing commit — .env-shaped files staged:"
   echo "$bad_env" | sed 's/^/    /'

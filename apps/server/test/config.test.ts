@@ -16,6 +16,8 @@ beforeEach(() => {
   delete process.env.ENABLE_HUNTER;
   delete process.env.ENABLE_YELP;
   delete process.env.SES_PRODUCTION_ACCESS_CONFIRMED;
+  delete process.env.UNSUBSCRIBE_SIGNING_SECRET;
+  delete process.env.CORS_ORIGIN;
   resetConfigCache();
 });
 
@@ -76,5 +78,48 @@ describe('config validation', () => {
     const cfg = getConfig();
     const issues = validateConfig(cfg);
     expect(issues.filter(i => i.severity === 'error')).toEqual([]);
+  });
+
+  it('UNSUBSCRIBE_SIGNING_SECRET overrides AUTH_COOKIE_SECRET when set', () => {
+    setEnv({
+      NODE_ENV: 'production', SAMPLE_MODE: 'false', DATABASE_URL: 'postgres://x',
+      AUTH_TOKEN: 'a'.repeat(40), AUTH_COOKIE_SECRET: 'b'.repeat(40),
+      UNSUBSCRIBE_SIGNING_SECRET: 'c'.repeat(40),
+      PUBLIC_BASE_URL: 'https://x.com',
+    });
+    const cfg = getConfig();
+    expect(cfg.unsubscribeSigningSecret).toBe('c'.repeat(40));
+    expect(cfg.authCookieSecret).toBe('b'.repeat(40));
+  });
+
+  it('UNSUBSCRIBE_SIGNING_SECRET falls back to AUTH_COOKIE_SECRET when unset', () => {
+    setEnv({
+      NODE_ENV: 'production', SAMPLE_MODE: 'false', DATABASE_URL: 'postgres://x',
+      AUTH_TOKEN: 'a'.repeat(40), AUTH_COOKIE_SECRET: 'b'.repeat(40),
+      PUBLIC_BASE_URL: 'https://x.com',
+    });
+    const cfg = getConfig();
+    expect(cfg.unsubscribeSigningSecret).toBe('b'.repeat(40));
+  });
+
+  it('CORS_ORIGIN parses comma-separated', () => {
+    setEnv({
+      NODE_ENV: 'production', SAMPLE_MODE: 'false', DATABASE_URL: 'postgres://x',
+      AUTH_TOKEN: 'a'.repeat(40), AUTH_COOKIE_SECRET: 'b'.repeat(40),
+      PUBLIC_BASE_URL: 'https://x.com',
+      CORS_ORIGIN: 'https://a.com, https://b.com',
+    });
+    const cfg = getConfig();
+    expect(cfg.corsOrigin).toEqual(['https://a.com', 'https://b.com']);
+  });
+
+  it('CORS_ORIGIN empty when unset (server derives from PUBLIC_BASE_URL)', () => {
+    setEnv({
+      NODE_ENV: 'production', SAMPLE_MODE: 'false', DATABASE_URL: 'postgres://x',
+      AUTH_TOKEN: 'a'.repeat(40), AUTH_COOKIE_SECRET: 'b'.repeat(40),
+      PUBLIC_BASE_URL: 'https://x.com',
+    });
+    const cfg = getConfig();
+    expect(cfg.corsOrigin).toEqual([]);
   });
 });

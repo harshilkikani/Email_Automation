@@ -236,7 +236,7 @@ export async function evaluateLaunchGate(db: Database, opts: LaunchGateOptions):
           physicalAddress: org?.physicalAddress ?? cfg.org.physicalAddress,
           orgName: org?.name ?? cfg.org.name,
         },
-        signingSecret: cfg.authCookieSecret,
+        signingSecret: cfg.unsubscribeSigningSecret,
         messageId: `<gate-${campaign.id}@${cfg.org.outreachSubdomain}>`,
       });
       const issues = lintEmail({

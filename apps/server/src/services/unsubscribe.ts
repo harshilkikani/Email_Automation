@@ -15,7 +15,7 @@ export interface UnsubscribeOutcome {
 
 export async function processUnsubscribe(db: Database, token: string): Promise<UnsubscribeOutcome> {
   const cfg = getConfig();
-  const payload = verifyUnsubscribeToken(token, cfg.authCookieSecret);
+  const payload = verifyUnsubscribeToken(token, cfg.unsubscribeSigningSecret);
   if (!payload) return { ok: false, reason: 'invalid_or_expired_token' };
   const orgId = payload.scope === 'GLOBAL' ? null : payload.scope;
   await db.insert(schema.suppressions).values({

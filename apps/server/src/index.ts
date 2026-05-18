@@ -52,9 +52,12 @@ async function main() {
     disableRequestLogging: cfg.nodeEnv === 'production',
   });
 
-  /* CORS allowlist — single origin in production. */
+  /* CORS allowlist — explicit CORS_ORIGIN (comma-separated) wins; falls back
+     to PUBLIC_BASE_URL + the local dev port in production; wide-open in dev. */
   const corsOrigins = cfg.nodeEnv === 'production'
-    ? [cfg.publicBaseUrl, `http://localhost:${cfg.webPort}`]
+    ? (cfg.corsOrigin.length > 0
+        ? cfg.corsOrigin
+        : [cfg.publicBaseUrl, `http://localhost:${cfg.webPort}`])
     : true;
   await app.register(cors, { origin: corsOrigins as any, credentials: true });
 
