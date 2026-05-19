@@ -5,7 +5,7 @@
 #
 # Behavior controlled by the SERVE_WEB env var (defaulted to `true` in this image).
 
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /repo
 
 RUN corepack enable && corepack prepare pnpm@9.7.0 --activate
@@ -28,7 +28,7 @@ RUN pnpm --filter @keres/core build \
  && pnpm --filter @keres/server build \
  && pnpm --filter @keres/web build
 
-FROM node:20-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.7.0 --activate
 
