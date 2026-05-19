@@ -331,9 +331,66 @@ describe('integration: Keres AI end-to-end', () => {
     expect(list.json().rows.some((x: any) => x.email === 'blocked@integration.test')).toBe(true);
   });
 
+  it.runIf(pgReachable)('/api/ready returns structured JSON with blockers when gate fails', async () => {
+    const r = await app!.inject({ method: 'GET', url: '/api/ready' });
+    /* In integration mode SAMPLE_MODE=true, so the launch gate has at least
+       the `sample_mode_off` blocker — the endpoint MUST be 503 and the body
+       MUST be JSON with a structured shape. */
+    expect(r.statusCode).toBe(503);
+    const b = r.json();
+    expect(b.ok).toBe(false);
+    expect(b.reason).toBe('launch_gate_blocked');
+    expect(typeof b.blockingCount).toBe('number');
+    expect(b.blockingCount).toBeGreaterThan(0);
+    expect(Array.isArray(b.blockers)).toBe(true);
+    expect(b.blockers.length).toBe(b.blockingCount);
+    for (const x of b.blockers) {
+      expect(typeof x.key).toBe('string');
+      expect(x.status).toBe('fail');
+      expect(typeof x.message).toBe('string');
+    }
+    /* `realOutboundEnabled` must be derivable from runtime config, not faked. */
+    expect(b.realOutboundEnabled).toBe(false);
+    expect(typeof b.enableSes).toBe('boolean');
+    expect(typeof b.sampleMode).toBe('boolean');
+    expect(typeof b.timestamp).toBe('string');
+    expect(b.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it.runIf(pgReachable)('unknown /api routes return clean JSON 404 (when authed)', async () => {
+    const r = await inject('GET', '/api/this-does-not-exist-anywhere');
+    expect(r.statusCode).toBe(404);
+    expect(r.headers['content-type']).toMatch(/application\/json/);
+    const b = r.json();
+    expect(b.ok).toBe(false);
+    expect(b.error).toBe('not_found');
+    expect(b.reason).toBe('unknown_api_route');
+  });
+
+  it.runIf(pgReachable)('/api/leads/search hits the UUID guard, returns 404 JSON (not 500)', async () => {
+    const r = await inject('GET', '/api/leads/search');
+    expect(r.statusCode).toBe(404);
+    const b = r.json();
+    expect(b.ok).toBe(false);
+    expect(b.reason).toBe('invalid_id_format');
+    expect(b.param).toBe('id');
+  });
+
+  it.runIf(pgReachable)('/api/leads/<garbage> returns 404 JSON, never 500', async () => {
+    const r = await inject('GET', '/api/leads/this-is-not-a-uuid');
+    expect(r.statusCode).toBe(404);
+    expect(r.json().reason).toBe('invalid_id_format');
+  });
+
+  it.runIf(pgReachable)('/api/campaigns/<garbage> returns 404 JSON, never 500', async () => {
+    const r = await inject('GET', '/api/campaigns/not-a-uuid-either');
+    expect(r.statusCode).toBe(404);
+    expect(r.json().reason).toBe('invalid_id_format');
+  });
+
   it('reports the skip reason when Postgres is unreachable', () => {
     if (!pgReachable) {
-       
+
       console.warn(`[integration] DB unreachable. ${skipReason}`);
     }
     expect(true).toBe(true);

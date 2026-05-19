@@ -42,8 +42,38 @@ async function singleOrgId(): Promise<string> {
   throw new Error('No organization configured. Run `pnpm db:seed` first.');
 }
 
+/* UUID v4 / general 36-char form: 8-4-4-4-12 hex with dashes.
+   Used by the global :id guard below to convert what would be a 500
+   ("invalid input syntax for type uuid") into a clean 404. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function registerRoutes(app: FastifyInstance) {
   const cfg = getConfig();
+
+  /* Global guard: every route that takes a `:id` (or `:campaignId`, etc.)
+     parameter expects a UUID. If the URL hits a parameterised route with a
+     non-UUID value (e.g. someone probes `/api/leads/search` and the router
+     binds `id="search"`), we'd otherwise hit Postgres with an invalid uuid
+     literal and emit a 500. This converts those into a clean 404 JSON. */
+  app.addHook('preHandler', async (req, reply) => {
+    const params = req.params as Record<string, string> | undefined;
+    if (!params) return;
+    for (const k of Object.keys(params)) {
+      const v = params[k];
+      if (typeof v !== 'string') continue;
+      const looksLikeIdKey = k === 'id' || /Id$/.test(k);
+      if (!looksLikeIdKey) continue;
+      if (UUID_RE.test(v)) continue;
+      reply.code(404);
+      return reply.send({
+        ok: false,
+        error: 'not_found',
+        reason: 'invalid_id_format',
+        param: k,
+        hint: 'expected a UUID',
+      });
+    }
+  });
 
   /* ────────────── Health ────────────── */
   app.get('/api/health', async () => ({
@@ -788,12 +818,65 @@ ${r.ok
   app.get('/api/niches', async () => ({ ok: true, niches: ALL_NICHES }));
 
   /* ────────────── System Diagnostics ────────────── */
+  /**
+   * `/api/ready` returns 200 only when every required launch-gate check
+   * passes. Until then it returns 503 with the full list of blockers so the
+   * operator (and any external monitor — Fly's own health checker, an
+   * uptime tool, Cloudflare cron) can read the JSON and know exactly which
+   * setup step is incomplete.
+   *
+   * `safeToUseForSetup` is the explicit "yes, the app is fine to click
+   * around in even though real send is off" signal. It is true when:
+   *   - DB is reachable
+   *   - migrations are applied
+   *   - sample mode is off (we're in real production code paths)
+   *   - SES is off (so no real send can happen)
+   * It does NOT imply real sending is allowed.
+   */
   app.get('/api/ready', async (_req, reply) => {
+    const timestamp = new Date().toISOString();
     try {
       const d = await runDiagnostics();
-      reply.code(d.ok ? 200 : 503).send({ ok: d.ok, db: d.db, sampleMode: d.sampleMode });
+      const blockers = d.gate.checks
+        .filter(c => c.state === 'fail')
+        .map(c => ({
+          key: c.code,
+          status: c.state,
+          message: c.detail ? `${c.label} — ${c.detail}` : c.label,
+          howToFix: c.fix ?? null,
+          docs: c.docs ?? null,
+        }));
+      const safeToUseForSetup =
+        d.db === 'connected' && d.migrations.current && !cfg.sampleMode && !cfg.ses.enabled;
+      const ok = d.ok && blockers.length === 0;
+      const payload = {
+        ok,
+        reason: ok ? null : 'launch_gate_blocked',
+        blockingCount: blockers.length,
+        warningCount: d.gate.warningCount,
+        blockers,
+        safeToUseForSetup,
+        realOutboundEnabled: cfg.ses.enabled && !cfg.sampleMode,
+        enableSes: cfg.ses.enabled,
+        sampleMode: cfg.sampleMode,
+        db: d.db,
+        migrations: d.migrations,
+        timestamp,
+      };
+      reply.code(ok ? 200 : 503);
+      return payload;
     } catch (e: any) {
-      reply.code(503).send({ ok: false, error: e?.message ?? String(e) });
+      reply.code(503);
+      return {
+        ok: false,
+        reason: 'diagnostics_threw',
+        error: e?.message ?? String(e),
+        safeToUseForSetup: false,
+        realOutboundEnabled: cfg.ses.enabled && !cfg.sampleMode,
+        enableSes: cfg.ses.enabled,
+        sampleMode: cfg.sampleMode,
+        timestamp,
+      };
     }
   });
   app.get('/api/diagnostics', async () => {

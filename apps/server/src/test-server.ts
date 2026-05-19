@@ -27,6 +27,22 @@ export async function buildTestApp(): Promise<FastifyInstance> {
   await app.register(rateLimit, { global: false, max: 10_000, timeWindow: '1 minute', skipOnError: true });
   registerAuth(app);
   registerRoutes(app);
+  /* Mirror the production setNotFoundHandler from index.ts so integration
+     tests observe the same 404 JSON shape as deployed traffic. The SPA
+     fallback is omitted here because tests don't serve the web bundle. */
+  app.setNotFoundHandler((req, reply) => {
+    if (req.url.startsWith('/api/')) {
+      reply.code(404).type('application/json');
+      return reply.send({
+        ok: false,
+        error: 'not_found',
+        reason: 'unknown_api_route',
+        path: req.url,
+      });
+    }
+    reply.code(404).type('application/json');
+    return reply.send({ ok: false, error: 'not_found' });
+  });
   await app.ready();
   return app;
 }

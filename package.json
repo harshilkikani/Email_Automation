@@ -24,7 +24,8 @@
     "start": "pnpm --filter @keres/server start",
     "preflight:local": "tsx scripts/preflight-local.ts",
     "preflight:deploy": "tsx scripts/preflight-deploy.ts",
-    "secrets:gen": "tsx scripts/generate-secrets.ts"
+    "secrets:gen": "tsx scripts/generate-secrets.ts",
+    "domain:plan": "tsx scripts/domain-plan.ts"
   },
   "devDependencies": {
     "@types/node": "^20.12.0",

@@ -93,6 +93,7 @@ async function main() {
 
   /* Optional: serve the React SPA from the same process. Useful for single-machine
      Fly deployments where you don't want a separate Cloudflare-Pages frontend. */
+  let spaEnabled = false;
   if (cfg.serveWeb) {
     const fastifyStatic = (await import('@fastify/static')).default;
     const path = await import('node:path');
@@ -102,17 +103,31 @@ async function main() {
       app.log.warn({ root }, 'SERVE_WEB=true but web dist not found; run `pnpm --filter @keres/web build` first');
     } else {
       await app.register(fastifyStatic, { root, prefix: '/' });
-      /* SPA fallback: any non-/api/* path returns index.html so client-side routes work. */
-      app.setNotFoundHandler((req, reply) => {
-        if (req.url.startsWith('/api/')) {
-          reply.code(404).send({ ok: false, error: 'not_found' });
-        } else {
-          reply.type('text/html').sendFile('index.html');
-        }
-      });
+      spaEnabled = true;
       app.log.info({ root }, 'serving web SPA from API process');
     }
   }
+
+  /* Unified 404 handler — always JSON for /api/*, optional SPA fallback for
+     everything else when SERVE_WEB=true. Registered unconditionally so that
+     `/api/this-does-not-exist` returns a clean structured 404 in every
+     deployment (dev, test, prod). */
+  app.setNotFoundHandler((req, reply) => {
+    if (req.url.startsWith('/api/')) {
+      reply.code(404).type('application/json');
+      return reply.send({
+        ok: false,
+        error: 'not_found',
+        reason: 'unknown_api_route',
+        path: req.url,
+      });
+    }
+    if (spaEnabled) {
+      return reply.type('text/html').sendFile('index.html');
+    }
+    reply.code(404).type('application/json');
+    return reply.send({ ok: false, error: 'not_found' });
+  });
 
   /* Per-route rate limit decorators applied by setting a custom config. */
   app.addHook('onRoute', route => {
