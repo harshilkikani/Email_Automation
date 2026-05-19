@@ -65,15 +65,28 @@ export default function App() {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [sampleMode, setSampleMode] = useState(true);
+  const [enableSes, setEnableSes] = useState<boolean | null>(null);
   const location = useLocation();
 
   useEffect(() => {
     api.get('/health').then(r => {
       setHealthy(!!r.ok);
-      if (r.ok && r.data) setSampleMode(!!r.data.sampleMode);
+      if (r.ok && r.data) {
+        setSampleMode(!!r.data.sampleMode);
+        setEnableSes(r.data.enableSes === true);
+      }
     });
     api.get('/settings').then(r => setAuthed(!!r.ok));
   }, []);
+
+  /* Setup-mode banner: production infra but outbound deliberately disabled.
+     This is the safe state we want the operator to recognize, not "broken". */
+  const setupBanner = healthy && !sampleMode && enableSes === false ? (
+    <div className="setup-banner" role="status">
+      <strong>Setup mode</strong>
+      <span>Production infrastructure is live, but outbound email is intentionally disabled (<code>ENABLE_SES=false</code>). The launch-gate blockers below are the checklist for turning real sending on. See <a href="https://github.com/harshilkikani/keres-ai/blob/main/docs/NEXT-DOMAIN-CLOUDFLARE-SES-PLAN.md" target="_blank" rel="noopener">NEXT-DOMAIN-CLOUDFLARE-SES-PLAN.md</a>.</span>
+    </div>
+  ) : null;
 
   if (authed === false) {
     return (
@@ -110,6 +123,7 @@ export default function App() {
             </span>
           </div>
         </header>
+        {setupBanner}
         <main key={location.pathname} className="page">
           <Routes>
             <Route path="/" element={<Dashboard />} />

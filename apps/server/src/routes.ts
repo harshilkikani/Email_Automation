@@ -46,7 +46,12 @@ export function registerRoutes(app: FastifyInstance) {
   const cfg = getConfig();
 
   /* ────────────── Health ────────────── */
-  app.get('/api/health', async () => ({ ok: true, sampleMode: cfg.sampleMode, mode: cfg.budgetMode }));
+  app.get('/api/health', async () => ({
+    ok: true,
+    sampleMode: cfg.sampleMode,
+    mode: cfg.budgetMode,
+    enableSes: cfg.ses.enabled,
+  }));
 
   /* ────────────── Settings ────────────── */
   app.get('/api/settings', async () => {

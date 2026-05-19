@@ -399,3 +399,13 @@ textarea.field-input{resize:vertical;min-height:120px;line-height:1.55}
 
 @media(max-width:1000px){.split{grid-template-columns:1fr}.sidebar{display:none}
   .health-hero{grid-template-columns:1fr}.builder-grid{grid-template-columns:1fr}}
+
+/* Setup-mode banner: production infrastructure with outbound deliberately off.
+   Calm/informational tone, not an error. Sits between header and main content. */
+.setup-banner{display:flex;gap:14px;align-items:baseline;padding:10px 22px;
+  background:linear-gradient(180deg,rgba(34,170,238,0.13),rgba(34,170,238,0.05));
+  border-bottom:1px solid rgba(34,170,238,0.35);color:var(--fg);font-size:13px}
+.setup-banner strong{color:var(--info);text-transform:uppercase;letter-spacing:0.08em;font-size:11px;font-weight:700}
+.setup-banner code{font-family:var(--mono);font-size:12px;background:rgba(255,255,255,0.08);
+  padding:1px 6px;border-radius:3px;color:var(--fg-2)}
+.setup-banner a{color:var(--info);text-decoration:underline}
