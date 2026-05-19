@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/email/src/index.js",
+  "types": "dist/email/src/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./render": "./src/render.ts",
-    "./headers": "./src/headers.ts",
-    "./unsubscribe": "./src/unsubscribe.ts",
-    "./linter": "./src/linter.ts"
+    ".":             { "types": "./dist/email/src/index.d.ts",       "default": "./dist/email/src/index.js" },
+    "./render":      { "types": "./dist/email/src/render.d.ts",      "default": "./dist/email/src/render.js" },
+    "./headers":     { "types": "./dist/email/src/headers.d.ts",     "default": "./dist/email/src/headers.js" },
+    "./unsubscribe": { "types": "./dist/email/src/unsubscribe.d.ts", "default": "./dist/email/src/unsubscribe.js" },
+    "./linter":      { "types": "./dist/email/src/linter.d.ts",      "default": "./dist/email/src/linter.js" }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

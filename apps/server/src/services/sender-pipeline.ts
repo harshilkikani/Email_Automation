@@ -23,6 +23,15 @@ export interface SendBatchOptions {
 
 export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{ sent: number; skipped: number; failed: number }> {
   const cfg = getConfig();
+  /* Defense-in-depth: in production with SES disabled, refuse to call the
+     outbound provider at all. The launch gate's `outbound_configured` check
+     normally prevents campaigns from reaching status='running' in this state,
+     but `/api/campaigns/:id/resume` can revive a paused campaign without
+     re-running the gate — this guard catches that path so MockOutbound never
+     "fake-sends" to real recipients. */
+  if (cfg.nodeEnv === 'production' && !cfg.ses.enabled && !cfg.sampleMode) {
+    return { sent: 0, skipped: 0, failed: 0 };
+  }
   const provider = getOutbound();
   let sent = 0, skipped = 0, failed = 0;
 

@@ -54,4 +54,6 @@ COPY --from=builder /repo/packages/providers/dist packages/providers/dist
 RUN pnpm install --prod --frozen-lockfile
 
 EXPOSE 8080
-CMD ["node", "apps/server/dist/index.js"]
+# Server TS emits to dist/<workspace-relative-path>/ because path-mapped imports
+# from packages/* push the inferred rootDir up to the repo root.
+CMD ["node", "apps/server/dist/apps/server/src/index.js"]

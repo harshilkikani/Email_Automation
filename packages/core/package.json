@@ -3,15 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./scoring": "./src/scoring.ts",
-    "./dedupe": "./src/dedupe.ts",
-    "./templates": "./src/templates.ts",
-    "./validation": "./src/validation.ts",
-    "./budget": "./src/budget.ts",
-    "./filters": "./src/filters.ts"
+    ".":            { "types": "./dist/index.d.ts",      "default": "./dist/index.js" },
+    "./scoring":    { "types": "./dist/scoring.d.ts",    "default": "./dist/scoring.js" },
+    "./dedupe":     { "types": "./dist/dedupe.d.ts",     "default": "./dist/dedupe.js" },
+    "./templates":  { "types": "./dist/templates.d.ts",  "default": "./dist/templates.js" },
+    "./validation": { "types": "./dist/validation.d.ts", "default": "./dist/validation.js" },
+    "./budget":     { "types": "./dist/budget.d.ts",     "default": "./dist/budget.js" },
+    "./filters":    { "types": "./dist/filters.d.ts",    "default": "./dist/filters.js" }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

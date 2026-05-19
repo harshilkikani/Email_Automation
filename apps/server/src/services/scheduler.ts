@@ -17,8 +17,11 @@
  * The scheduler tracks each tick in `job_runs` so the operator can see what
  * the system has been doing. Failures are logged but do not crash the loop.
  *
- * Disabled in sample mode (the operator wants explicit clicks during dev).
- * Disabled when ENABLE_SES=false (no send loop needed).
+ * Disabled wholesale in sample mode (the operator wants explicit clicks
+ * during dev). When ENABLE_SES=false in production the scheduler still
+ * runs — but `tickSendBatch` short-circuits inside `sendBatch` so no
+ * outbound calls (even mock) are issued. DNS/warmup/budget ticks still
+ * tick because they're useful during pre-SES domain setup.
  */
 import { and, eq, sql, lt } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
