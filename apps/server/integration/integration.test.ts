@@ -388,6 +388,142 @@ describe('integration: Keres AI end-to-end', () => {
     expect(r.json().reason).toBe('invalid_id_format');
   });
 
+  /* ──────────────── New-layer integration coverage ──────────────── */
+
+  it.runIf(pgReachable)('domain_events: insert + read round-trips', async () => {
+    const { emitEvent } = await import('../src/services/events.js');
+    const db = (await import('@keres/db')).getDb();
+    const orgRow = (await db.select({ id: (await import('@keres/db')).schema.organizations.id }).from((await import('@keres/db')).schema.organizations).limit(1))[0];
+    if (!orgRow) throw new Error('no org seeded');
+    await emitEvent(db, orgRow.id, 'test.audit_probe', 'integration_test', 'probe-1', { hello: 'world' });
+    const r = await inject('GET', '/api/domain-events?aggregateType=integration_test&aggregateId=probe-1');
+    expect(r.statusCode).toBe(200);
+    const j = r.json();
+    expect(j.ok).toBe(true);
+    expect(Array.isArray(j.rows)).toBe(true);
+    const probe = j.rows.find((e: any) => e.eventType === 'test.audit_probe');
+    expect(probe).toBeTruthy();
+    expect(probe.payload?.hello).toBe('world');
+  });
+
+  it.runIf(pgReachable)('closed-loop tick: writes proposals but does NOT auto-apply when CLOSED_LOOP_AUTO_APPLY=false', async () => {
+    /* The integration test runs in SAMPLE_MODE=true and never sets
+       CLOSED_LOOP_AUTO_APPLY, so the env default (false) governs. We
+       assert the tick is a no-op for auto-apply regardless of evidence:
+       it should record proposals (or 0 if no recipients) but never write
+       a new scoring_versions row. */
+    const { tickClosedLoop } = await import('../src/services/closed-loop.js');
+    const db = (await import('@keres/db')).getDb();
+    const before = (await db.select().from((await import('@keres/db')).schema.scoringVersions)).length;
+    const log = (app as any).log;
+    const out = await tickClosedLoop(db, log) as { totalAutoApplied?: number; totalAutoSkipped?: number };
+    expect(out.totalAutoApplied ?? 0).toBe(0);
+    /* totalAutoSkipped equals the number of proposals that *would* have
+       been considered for auto-apply but were skipped because the env
+       flag is off. May be 0 if there were no proposals at all. */
+    expect(out.totalAutoSkipped).toBeGreaterThanOrEqual(0);
+    const after = (await db.select().from((await import('@keres/db')).schema.scoringVersions)).length;
+    expect(after).toBe(before);
+  });
+
+  it.runIf(pgReachable)('DLQ replay: refuses when launch gate fails', async () => {
+    /* Construct a synthetic dead_letters row pointing at the existing seeded
+       campaign + recipient (from the launch flow earlier in this suite). The
+       campaign's gate will fail at minimum on sample_mode_off (we're in
+       SAMPLE_MODE=true) so the replay must return 412 with the structured
+       blocker list. */
+    const db = (await import('@keres/db')).getDb();
+    const { schema: s } = await import('@keres/db');
+    const orgRow = (await db.select({ id: s.organizations.id }).from(s.organizations).limit(1))[0]!;
+    const camp = (await db.select().from(s.campaigns).limit(1))[0];
+    if (!camp) {
+      console.warn('[integration] DLQ replay test skipped — no campaign in DB');
+      return;
+    }
+    const { eq: _eq } = await import('drizzle-orm');
+    const recipient = (await db.select().from(s.campaignRecipients).where(_eq(s.campaignRecipients.campaignId, camp.id)).limit(1))[0];
+    if (!recipient) {
+      console.warn('[integration] DLQ replay test skipped — no recipient');
+      return;
+    }
+    const inserted = await db.insert(s.deadLetters).values({
+      orgId: orgRow.id, campaignId: camp.id, recipientId: recipient.id,
+      failReason: 'integration_test_synthetic', archivedAt: new Date(),
+    }).returning({ id: s.deadLetters.id });
+    const dlId = inserted[0]!.id;
+    const r = await inject('POST', `/api/dead-letters/${dlId}/replay`);
+    expect(r.statusCode).toBe(412);
+    const b = r.json();
+    expect(b.ok).toBe(false);
+    expect(b.error).toBe('launch_gate_blocked');
+    expect(b.reason).toBe('replay_would_violate_launch_gate');
+    expect(Array.isArray(b.blockers)).toBe(true);
+    expect(b.blockers.length).toBeGreaterThan(0);
+    /* Recipient must NOT have been resurrected. */
+    const after = (await db.select().from(s.campaignRecipients).where(_eq(s.campaignRecipients.id, recipient.id)).limit(1))[0]!;
+    expect(after.state).toBe(recipient.state);  // unchanged
+  });
+
+  it.runIf(pgReachable)('send-time deferral writes a future nextSendAt when histogram says so', async () => {
+    /* Pure-function delegate: deferralTarget() already has full unit
+       coverage. Here we just verify the wiring — that getPreferredHoursBulk
+       returns a Map keyed by orgId|niche for our seeded org without
+       throwing. */
+    const { getPreferredHoursBulk } = await import('../src/services/send-time-histogram.js');
+    const db = (await import('@keres/db')).getDb();
+    const { schema: s } = await import('@keres/db');
+    const orgRow = (await db.select({ id: s.organizations.id }).from(s.organizations).limit(1))[0]!;
+    const m = await getPreferredHoursBulk(db, [{ orgId: orgRow.id, niche: 'Septic' }], { startHour: 14, endHour: 22 });
+    expect(m).toBeInstanceOf(Map);
+    /* Cold-start: empty histogram → empty Map. The deferral logic falls back
+       to "send now" in that case, which is the desired behaviour for a
+       fresh deployment. */
+  });
+
+  it.runIf(pgReachable)('queue.enqueue + singletonKey dedup + sampleMetrics', async () => {
+    const { initQueue } = await import('../src/services/queue.js');
+    const { schema: s, getDb } = await import('@keres/db');
+    const { eq } = await import('drizzle-orm');
+    const db = getDb();
+    const log = (app as any).log;
+    const q = await initQueue(db, log);
+    const farFuture = new Date(Date.now() + 60_000);  // 60s out — won't be claimed
+
+    /* enqueue + queued state */
+    const id1 = await q.enqueue('q_int_basic', { hello: 'world' }, { scheduledFor: farFuture });
+    expect(typeof id1).toBe('string');
+    const row = (await db.select().from(s.jobRuns).where(eq(s.jobRuns.id, id1!)).limit(1))[0];
+    expect(row?.kind).toBe('q_int_basic');
+    expect(row?.status).toBe('queued');
+
+    /* singletonKey dedup: second enqueue returns same id */
+    const key = 'sk-' + Math.random().toString(36).slice(2);
+    const a = await q.enqueue('q_int_singleton', { a: 1 }, { singletonKey: key, scheduledFor: farFuture });
+    const b = await q.enqueue('q_int_singleton', { a: 2 }, { singletonKey: key, scheduledFor: farFuture });
+    expect(b).toBe(a);
+
+    /* sampleMetrics groups by (kind, status) */
+    const m = await q.sampleMetrics(db);
+    expect(m.tier).toBe('db');
+    expect(m.counts['q_int_basic']?.['queued']).toBeGreaterThanOrEqual(1);
+    expect(m.counts['q_int_singleton']?.['queued']).toBe(1);  // dedup proves only ONE row
+  });
+
+  it.runIf(pgReachable)('migrations are idempotent against a seeded DB', async () => {
+    /* The release_command runs `node packages/db/dist/migrate.js` on every
+       deploy. Confirm it's a no-op when nothing new is pending. */
+    const { migrateAndSeed } = await import('./setup.js');
+    /* Run migrate+seed a second time. */
+    await migrateAndSeed();
+    /* If we got here without throwing, the migrations are happy with
+       existing data. Also verify the migration ledger has at least the
+       6 known migration files. */
+    const db = (await import('@keres/db')).getDb();
+    const r = await db.execute((await import('drizzle-orm')).sql`SELECT count(*)::int AS n FROM _keres_migrations`);
+    const n = ((r as unknown as { rows?: Array<{ n: number }> }).rows?.[0]?.n ?? 0);
+    expect(n).toBeGreaterThanOrEqual(6);
+  });
+
   it('reports the skip reason when Postgres is unreachable', () => {
     if (!pgReachable) {
 

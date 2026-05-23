@@ -1008,12 +1008,47 @@ ${r.ok
     return { ok: true, rows, total: rows.length };
   });
 
-  app.post('/api/dead-letters/:id/replay', async (req) => {
+  app.post('/api/dead-letters/:id/replay', async (req, reply) => {
     const { id } = req.params as { id: string };
     const db = getDb();
     const row = (await db.select().from(schema.deadLetters).where(eq(schema.deadLetters.id, id)).limit(1))[0];
     if (!row) return { ok: false, error: 'not_found' };
     if (!row.recipientId) return { ok: false, error: 'no_recipient' };
+    if (!row.campaignId) return { ok: false, error: 'no_campaign' };
+
+    /* Re-check the launch gate before resurrecting a DLQ'd recipient. The
+       original launch passed the gate at campaign-launch time; circumstances
+       can have changed (SES disabled, DNS regressed, seedlist stale,
+       campaign paused). Refusing to replay onto a now-failing gate is the
+       safer default — the operator can resolve the underlying blocker first
+       and click replay again. */
+    const gate = await evaluateLaunchGate(db, {
+      campaignId: row.campaignId,
+      bouncePausePct: cfg.bouncePausePct,
+      complaintPausePct: cfg.complaintPausePct,
+      seedlistTtlHours: 24 * 7,
+    });
+    /* Block on any of the "real send is unsafe" checks — the rest (e.g.
+       per-campaign copy lint warnings) shouldn't gate an individual replay. */
+    const BLOCKING_FOR_REPLAY = new Set([
+      'sample_mode_off', 'outbound_configured', 'ses_production_access',
+      'sender_domain_exists', 'spf_pass', 'dkim_pass', 'dmarc_pass',
+      'unsub_reachable', 'physical_address_set', 'campaign_state',
+    ]);
+    const failing = gate.checks.filter(c => c.state === 'fail' && BLOCKING_FOR_REPLAY.has(c.code));
+    if (failing.length > 0) {
+      await writeAudit('dead_letter_replay_blocked', id, {
+        recipientId: row.recipientId, blockers: failing.map(f => f.code),
+      }, req);
+      reply.code(412);
+      return {
+        ok: false,
+        error: 'launch_gate_blocked',
+        reason: 'replay_would_violate_launch_gate',
+        blockers: failing.map(f => ({ key: f.code, message: f.label, howToFix: f.fix ?? null })),
+      };
+    }
+
     /* Reset the recipient back to pending so the next sendBatch tick picks it up. */
     await db.update(schema.campaignRecipients).set({
       state: 'pending', retryCount: 0, nextSendAt: null, skipReason: null,

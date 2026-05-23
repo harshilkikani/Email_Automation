@@ -75,13 +75,17 @@ export async function tickReplyBranches(db: Database, log: FastifyBaseLogger): P
       AND cr.state IN ('sent','delivered')
     LIMIT 200
   `);
-  const recipientRows = ((newRows as unknown as { rows?: Array<{ recipient_id: string; org_id: string; campaign_id: string; lead_id: string; first_sent_at: Date }> }).rows ?? []) as Array<{ recipient_id: string; org_id: string; campaign_id: string; lead_id: string; first_sent_at: Date }>;
+  const recipientRows = ((newRows as unknown as { rows?: Array<{ recipient_id: string; org_id: string; campaign_id: string; lead_id: string; first_sent_at: Date | string }> }).rows ?? []) as Array<{ recipient_id: string; org_id: string; campaign_id: string; lead_id: string; first_sent_at: Date | string }>;
   for (const r of recipientRows) {
+    /* Raw SQL execute() returns timestamp columns as `Date` under the
+       node-postgres driver but as ISO strings under @neondatabase/serverless's
+       HTTP driver. Coerce here so neither path crashes. */
+    const sentAt = r.first_sent_at instanceof Date ? r.first_sent_at : new Date(r.first_sent_at);
     const inserted = await db.insert(schema.replyBranchStates).values({
       orgId: r.org_id, campaignId: r.campaign_id, leadId: r.lead_id, recipientId: r.recipient_id,
       node: 'awaiting_reply',
       followUpsSent: 0,
-      nextActionAt: new Date(r.first_sent_at.getTime() + 48 * 3600_000),
+      nextActionAt: new Date(sentAt.getTime() + 48 * 3600_000),
       nextActionKind: 'send_followup',
       nextActionPayload: { templateKey: 'follow_up_1' } as Record<string, unknown>,
       trail: [{ at: new Date().toISOString(), from: 'init', to: 'awaiting_reply', cause: 'lazy_create' }] as unknown as Record<string, unknown>,

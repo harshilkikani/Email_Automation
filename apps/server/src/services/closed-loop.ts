@@ -25,6 +25,7 @@ import {
 import type { ScoringVersion } from '@keres/core';
 import { writeAudit } from './audit.js';
 import { withSpan, obs } from '../observability.js';
+import { getConfig } from '../config.js';
 
 const DEFAULT_WINDOW_DAYS = 30;
 
@@ -326,8 +327,9 @@ export async function rejectScoringProposal(
 const AUTO_APPLY_MIN_OBSERVATIONS = 200;
 
 export async function tickClosedLoop(db: Database, log: FastifyBaseLogger): Promise<unknown> {
+  const cfg = getConfig();
   const orgs = await db.select({ id: schema.organizations.id }).from(schema.organizations);
-  let totalSignals = 0, totalProposals = 0, totalAutoApplied = 0;
+  let totalSignals = 0, totalProposals = 0, totalAutoApplied = 0, totalAutoSkipped = 0;
   for (const o of orgs) {
     const agg = await aggregateSignalOutcomes(db, o.id, DEFAULT_WINDOW_DAYS);
     totalSignals += agg.written;
@@ -335,8 +337,17 @@ export async function tickClosedLoop(db: Database, log: FastifyBaseLogger): Prom
     if (prop.proposalId) {
       totalProposals++;
 
-      /* Auto-apply confidence gate: all evidence buckets must have >= MIN
-         observations and the proposal must have at least 3 signal changes. */
+      /* Auto-apply has two gates and is OFF by default:
+           1. CLOSED_LOOP_AUTO_APPLY env flag must be true (operator opt-in).
+           2. Confidence gate: all evidence buckets >= MIN observations and
+              the proposal must have >= 3 signal changes.
+         The proposal row is always written; the operator can apply via the
+         /api/scoring/proposals/:id/apply route after review. */
+      if (!cfg.closedLoopAutoApply) {
+        totalAutoSkipped++;
+        continue;
+      }
+
       const evidenceHighConfidence =
         prop.proposal.evidence.length >= 3 &&
         prop.proposal.evidence.every(e => (e.nObservations ?? 0) >= AUTO_APPLY_MIN_OBSERVATIONS);
@@ -352,7 +363,7 @@ export async function tickClosedLoop(db: Database, log: FastifyBaseLogger): Prom
       }
     }
   }
-  return { totalSignals, totalProposals, totalAutoApplied, orgs: orgs.length };
+  return { totalSignals, totalProposals, totalAutoApplied, totalAutoSkipped, orgs: orgs.length };
 }
 
 /* ────────── Internals ────────── */

@@ -123,6 +123,21 @@ export interface KeresConfig {
     requestTimeoutMs: number;
   };
 
+  /**
+   * Closed-loop scoring auto-apply.
+   *
+   * When false (default), the daily `tickClosedLoop` job aggregates signal
+   * outcomes and writes scoring_proposals rows, but it does NOT mutate
+   * scoring_versions. An operator must explicitly POST
+   * `/api/scoring/proposals/:id/apply` to commit a weight change.
+   *
+   * When true, the same job auto-applies a proposal once every signal in
+   * its evidence has >= 200 observations and the proposal includes >= 3
+   * signal changes. Audit-logged either way; the difference is whether a
+   * human ever reviewed the proposal before the weights moved.
+   */
+  closedLoopAutoApply: boolean;
+
   /** Market saturation hard cap (% of zip's eligible leads reachable in the rolling window). */
   saturation: {
     rollingDays: number;
@@ -244,6 +259,8 @@ export function getConfig(): Readonly<KeresConfig> {
       ollamaModel: str('OLLAMA_MODEL', 'llama3.1:8b-instruct-q4_K_M'),
       requestTimeoutMs: num('AI_REQUEST_TIMEOUT_MS', 60_000),
     },
+
+    closedLoopAutoApply: bool('CLOSED_LOOP_AUTO_APPLY', false),
 
     saturation: {
       rollingDays: num('SATURATION_ROLLING_DAYS', 30),
