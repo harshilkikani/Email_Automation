@@ -32,6 +32,7 @@ export default defineConfig({
       { find: '@keres/core/validation',   replacement: path.resolve(here, 'packages/core/src/validation.ts') },
       { find: '@keres/core/budget',       replacement: path.resolve(here, 'packages/core/src/budget.ts') },
       { find: '@keres/core/filters',      replacement: path.resolve(here, 'packages/core/src/filters.ts') },
+      { find: '@keres/core/decision',     replacement: path.resolve(here, 'packages/core/src/decision.ts') },
       { find: '@keres/core',              replacement: path.resolve(here, 'packages/core/src/index.ts') },
       { find: '@keres/email/headers',     replacement: path.resolve(here, 'packages/email/src/headers.ts') },
       { find: '@keres/email/unsubscribe', replacement: path.resolve(here, 'packages/email/src/unsubscribe.ts') },

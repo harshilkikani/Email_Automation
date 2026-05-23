@@ -19,6 +19,7 @@ import rateLimit from '@fastify/rate-limit';
 import { getConfig, validateConfig } from './config.js';
 import { registerAuth } from './auth.js';
 import { registerRoutes } from './routes.js';
+import { registerPerOrgRateLimit } from './services/per-org-rate-limit.js';
 import { initObservability, startProcessMetrics } from './observability.js';
 import { getDb } from '@keres/db';
 
@@ -96,6 +97,9 @@ async function main() {
   app.addHook('onClose', async () => procMetrics.stop());
 
   registerAuth(app);
+  /* Per-org token bucket — must register AFTER auth so the open routes
+     (health, ready, login, webhooks, unsubscribe) skip the bucket. */
+  registerPerOrgRateLimit(app);
   registerRoutes(app);
 
   /* Optional: serve the React SPA from the same process. Useful for single-machine

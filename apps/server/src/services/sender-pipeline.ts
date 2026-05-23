@@ -9,7 +9,7 @@
 import { and, eq, sql, asc, inArray, lte, or, isNull } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
-import { defaultTemplateFor, renderEmail, TEMPLATES, type Template } from '@keres/core';
+import { defaultTemplateFor, renderEmail, TEMPLATES, type Template, type CampaignDecision } from '@keres/core';
 import { finalRender, lintEmail, highestSeverity } from '@keres/email';
 import { randomUUID } from 'node:crypto';
 import { getConfig } from '../config.js';
@@ -18,27 +18,16 @@ import { getOutbound } from './sender-factory.js';
 import { pickMailbox, recordSendOutcome, type PickedMailbox } from './sender-rotation.js';
 import { checkSaturationBeforeSend } from './saturation.js';
 import { emitEvent } from './events.js';
+import { getPreferredHoursBulk, deferralTarget } from './send-time-histogram.js';
 
 /**
- * Pre-flight decision: all the per-recipient choices that happen before the
- * actual SES call. Extracting this makes the send loop readable and testable.
+ * `CampaignDecision` is now exported from `@keres/core` (see
+ * `packages/core/src/decision.ts`). `PickedMailbox` is the producer-side
+ * superset that the pipeline narrows to a `MailboxIdentity` at the seam.
  *
- * `mailbox` is the trimmed `PickedMailbox` (id + identity fields) rather than
- * the full schema row — `pickMailbox` already selected and reserved capacity,
- * and downstream callers only need the identity. This also lets us move the
- * type into `@keres/core` without dragging the server-side Drizzle schema with
- * it (see CampaignDecision re-export in packages/core).
+ * Evaluate whether this recipient should be sent to and which identity/
+ * template to use.
  */
-export interface CampaignDecision {
-  shouldSend: boolean;
-  skipReason?: string;
-  mailbox: PickedMailbox | null;
-  template: Template;
-  subjectOverrides: string[];
-  senderIdentity: { fromName: string; fromEmail: string; replyTo: string };
-}
-
-/** Evaluate whether this recipient should be sent to and which identity/template to use. */
 function computeDecision(
   camp: typeof schema.campaigns.$inferSelect,
   lead: typeof schema.leads.$inferSelect,
@@ -98,7 +87,15 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
     .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignRecipients.campaignId))
     .where(and(
       or(
-        eq(schema.campaignRecipients.state, 'pending'),
+        /* pending → eligible immediately unless histogram-deferral set nextSendAt. */
+        and(
+          eq(schema.campaignRecipients.state, 'pending'),
+          or(
+            isNull(schema.campaignRecipients.nextSendAt),
+            lte(schema.campaignRecipients.nextSendAt, new Date()),
+          ),
+        ),
+        /* failed → retry-eligible if attempts left and back-off has elapsed. */
         and(
           eq(schema.campaignRecipients.state, 'failed'),
           sql`${schema.campaignRecipients.retryCount} < 3`,
@@ -146,12 +143,37 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
     }
   }
 
+  /* Layer 7 read-side: for each (org, niche) pair in this batch, look up the
+     preferred UTC hour in send_time_histograms. Recipients whose niche prefers
+     a later hour today get `nextSendAt` pushed forward and are skipped this
+     tick. Cold-start niches (no histogram data) fall through and send now. */
+  const preferredHours = await getPreferredHoursBulk(
+    db,
+    leadRows.map(l => ({ orgId: l.orgId, niche: l.niche })),
+    cfg.sendWindow,
+  );
+  const wallNow = new Date();
+
   for (const r of recipients) {
     const camp = campMap.get(r.campaignId);
     const lead = leadMap.get(r.leadId);
     const org = orgMap.get(r.orgId);
     if (!camp || !org) { skipped++; continue; }
     if (!lead) { skipped++; await markSkipped(db, r.rid, 'no_lead'); continue; }
+
+    /* Layer 7: defer to high-reply-rate hour if this niche has a learned
+       preference and we're earlier in the day. Updates `nextSendAt` and
+       skips this tick — the deferred recipient will be picked up by a
+       later tick because the eligibility query gates on nextSendAt. */
+    const prefHour = preferredHours.get(`${lead.orgId}|${lead.niche}`) ?? null;
+    const defer = deferralTarget(wallNow, prefHour, cfg.sendWindow);
+    if (defer) {
+      await db.update(schema.campaignRecipients)
+        .set({ nextSendAt: defer })
+        .where(eq(schema.campaignRecipients.id, r.rid));
+      skipped++;
+      continue;
+    }
 
     /* Pick a sender mailbox (needed by computeDecision for identity). */
     const picked = await pickMailbox(db, org.id, {

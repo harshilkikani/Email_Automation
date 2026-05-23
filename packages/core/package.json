@@ -12,7 +12,8 @@
     "./templates":  { "types": "./dist/templates.d.ts",  "default": "./dist/templates.js" },
     "./validation": { "types": "./dist/validation.d.ts", "default": "./dist/validation.js" },
     "./budget":     { "types": "./dist/budget.d.ts",     "default": "./dist/budget.js" },
-    "./filters":    { "types": "./dist/filters.d.ts",    "default": "./dist/filters.js" }
+    "./filters":    { "types": "./dist/filters.d.ts",    "default": "./dist/filters.js" },
+    "./decision":   { "types": "./dist/decision.d.ts",   "default": "./dist/decision.js" }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

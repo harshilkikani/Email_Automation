@@ -140,6 +140,17 @@ export interface KeresConfig {
     /** Days of week to send: 0=Sun 1=Mon...6=Sat. Default Mon-Fri. */
     daysOfWeek: number[];
   };
+
+  /** Per-organization token-bucket request rate limit. In-memory; bounded to
+   *  one process. Fails open on resolver error so a DB hiccup never blocks
+   *  the API. */
+  perOrgRateLimit: {
+    enabled: boolean;
+    /** Tokens added per second. */
+    rps: number;
+    /** Bucket capacity = max burst above the steady rate. */
+    burst: number;
+  };
 }
 
 let cached: Readonly<KeresConfig> | null = null;
@@ -247,6 +258,12 @@ export function getConfig(): Readonly<KeresConfig> {
       daysOfWeek: (str('SEND_WINDOW_DAYS', '1,2,3,4,5')).split(',')
         .map(s => parseInt(s.trim(), 10))
         .filter(n => Number.isFinite(n) && n >= 0 && n <= 6),
+    },
+
+    perOrgRateLimit: {
+      enabled: bool('PER_ORG_RATE_LIMIT_ENABLED', true),
+      rps:     num('PER_ORG_RATE_LIMIT_RPS', 10),
+      burst:   num('PER_ORG_RATE_LIMIT_BURST', 100),
     },
   };
   cached = Object.freeze(cfg);
