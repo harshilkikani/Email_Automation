@@ -94,6 +94,63 @@ export interface KeresConfig {
   /** When true, the API process also serves the React SPA from `apps/web/dist`. */
   serveWeb: boolean;
   webDistPath: string;
+
+  /** Observability — all optional. Sentry/OTel each activate only when their endpoint is set. */
+  observability: {
+    sentryDsn: string;
+    otelEndpoint: string;        // e.g. http://localhost:4318
+    serviceName: string;
+    serviceVersion: string;
+    release: string;
+  };
+
+  /** Hybrid queue tier. `db` = existing job_runs; `pg-boss` = pg-boss for high-volume work. */
+  queue: {
+    tier: 'db' | 'pg-boss';
+    /** Optional, lets pg-boss talk to a different DB if you want to isolate it. Defaults to DATABASE_URL. */
+    connectionString: string;
+    workerConcurrency: number;
+    /** Per-tick max sends — overridable so tests can pin batch size. */
+    sendBatchSize: number;
+  };
+
+  /** Offline AI adapter. Default off; when on, only batch endpoints are allowed. */
+  ai: {
+    enabled: boolean;
+    runtime: 'noop' | 'ollama';
+    ollamaUrl: string;
+    ollamaModel: string;
+    requestTimeoutMs: number;
+  };
+
+  /** Market saturation hard cap (% of zip's eligible leads reachable in the rolling window). */
+  saturation: {
+    rollingDays: number;
+    hardCapPct: number;       // refuse send when > this
+    softCapPct: number;       // deboost score when > this
+    decayTauDays: number;     // e^(-t/tau)
+  };
+
+  /** Send-time window — only fire outbound during business hours to protect deliverability. */
+  sendWindow: {
+    /** UTC hour to start sending, inclusive (default 14 = 10am ET / 9am CT). */
+    startHour: number;
+    /** UTC hour to stop sending, exclusive (default 22 = 6pm ET / 5pm CT). */
+    endHour: number;
+    /** Days of week to send: 0=Sun 1=Mon...6=Sat. Default Mon-Fri. */
+    daysOfWeek: number[];
+  };
+
+  /** Per-organization token-bucket request rate limit. In-memory; bounded to
+   *  one process. Fails open on resolver error so a DB hiccup never blocks
+   *  the API. */
+  perOrgRateLimit: {
+    enabled: boolean;
+    /** Tokens added per second. */
+    rps: number;
+    /** Bucket capacity = max burst above the steady rate. */
+    burst: number;
+  };
 }
 
 let cached: Readonly<KeresConfig> | null = null;
@@ -164,6 +221,50 @@ export function getConfig(): Readonly<KeresConfig> {
     logLevel: str('LOG_LEVEL', 'info'),
     serveWeb: bool('SERVE_WEB', false),
     webDistPath: str('WEB_DIST_PATH', ''),
+
+    observability: {
+      sentryDsn: str('SENTRY_DSN', ''),
+      otelEndpoint: str('OTEL_EXPORTER_OTLP_ENDPOINT', ''),
+      serviceName: str('OTEL_SERVICE_NAME', 'keres-server'),
+      serviceVersion: str('OTEL_SERVICE_VERSION', '0.1.0'),
+      release: str('RELEASE_SHA', ''),
+    },
+
+    queue: {
+      tier: (str('QUEUE_TIER', 'db') as 'db' | 'pg-boss'),
+      connectionString: str('QUEUE_DATABASE_URL') || str('DATABASE_URL', ''),
+      workerConcurrency: num('QUEUE_WORKER_CONCURRENCY', 4),
+      sendBatchSize: num('SEND_BATCH_SIZE', 5),
+    },
+
+    ai: {
+      enabled: bool('ENABLE_LOCAL_AI', false),
+      runtime: (str('AI_RUNTIME', 'noop') as 'noop' | 'ollama'),
+      ollamaUrl: str('OLLAMA_URL', 'http://localhost:11434'),
+      ollamaModel: str('OLLAMA_MODEL', 'llama3.1:8b-instruct-q4_K_M'),
+      requestTimeoutMs: num('AI_REQUEST_TIMEOUT_MS', 60_000),
+    },
+
+    saturation: {
+      rollingDays: num('SATURATION_ROLLING_DAYS', 30),
+      hardCapPct: num('SATURATION_HARD_CAP_PCT', 60),
+      softCapPct: num('SATURATION_SOFT_CAP_PCT', 30),
+      decayTauDays: num('SATURATION_DECAY_TAU_DAYS', 14),
+    },
+
+    sendWindow: {
+      startHour: num('SEND_WINDOW_START_HOUR', 14),
+      endHour:   num('SEND_WINDOW_END_HOUR', 22),
+      daysOfWeek: (str('SEND_WINDOW_DAYS', '1,2,3,4,5')).split(',')
+        .map(s => parseInt(s.trim(), 10))
+        .filter(n => Number.isFinite(n) && n >= 0 && n <= 6),
+    },
+
+    perOrgRateLimit: {
+      enabled: bool('PER_ORG_RATE_LIMIT_ENABLED', true),
+      rps:     num('PER_ORG_RATE_LIMIT_RPS', 10),
+      burst:   num('PER_ORG_RATE_LIMIT_BURST', 100),
+    },
   };
   cached = Object.freeze(cfg);
   return cached;
@@ -242,6 +343,15 @@ export function validateConfig(cfg: Readonly<KeresConfig>): ValidationIssue[] {
   }
   if (!cfg.org.physicalAddress && cfg.nodeEnv === 'production') {
     issues.push({ severity: 'warn', code: 'no_physical_address', message: 'PHYSICAL_ADDRESS is empty. CAN-SPAM-compliant sends are blocked until set.' });
+  }
+  if (cfg.queue.tier !== 'db' && cfg.queue.tier !== 'pg-boss') {
+    issues.push({ severity: 'error', code: 'queue_tier_invalid', message: `QUEUE_TIER must be 'db' or 'pg-boss' (got ${cfg.queue.tier}).` });
+  }
+  if (cfg.ai.enabled && cfg.ai.runtime === 'ollama' && !cfg.ai.ollamaUrl) {
+    issues.push({ severity: 'error', code: 'ai_ollama_no_url', message: 'ENABLE_LOCAL_AI=true with AI_RUNTIME=ollama but OLLAMA_URL is empty.' });
+  }
+  if (cfg.saturation.softCapPct > cfg.saturation.hardCapPct) {
+    issues.push({ severity: 'warn', code: 'saturation_caps_inverted', message: 'SATURATION_SOFT_CAP_PCT > SATURATION_HARD_CAP_PCT — soft cap will never fire.' });
   }
   return issues;
 }

@@ -112,19 +112,27 @@ export async function buildRecipients(db: Database, campaignId: string): Promise
   }
 
   /* Bulk insert recipients, skipping suppression / non-contactable status. */
-  let inserted = 0;
-  for (const l of leads) {
-    if (!l.email) continue;
-    if (['bounced', 'unsubscribed', 'dnc'].includes(l.status)) continue;
-    if (suppressedEmails.has(l.email.toLowerCase())) continue;
-    if (l.dedupDomain && suppressedDomains.has(l.dedupDomain.toLowerCase())) continue;
-    await db.insert(schema.campaignRecipients).values({
-      orgId: camp.orgId, campaignId, leadId: l.id,
-      bucket: audience.bucketByLeadId[l.id] ?? null,
-      state: 'pending',
-    }).onConflictDoNothing({ target: [schema.campaignRecipients.campaignId, schema.campaignRecipients.leadId] });
-    inserted++;
+  const recipientRows = leads.filter(l => {
+    if (!l.email) return false;
+    if (['bounced', 'unsubscribed', 'dnc'].includes(l.status)) return false;
+    if (suppressedEmails.has(l.email.toLowerCase())) return false;
+    if (l.dedupDomain && suppressedDomains.has(l.dedupDomain.toLowerCase())) return false;
+    return true;
+  }).map(l => ({
+    orgId: camp.orgId,
+    campaignId,
+    leadId: l.id,
+    bucket: (audience.bucketByLeadId[l.id] ?? null) as string | null,
+    state: 'pending' as const,
+  }));
+
+  const CHUNK = 500;
+  for (let i = 0; i < recipientRows.length; i += CHUNK) {
+    await db.insert(schema.campaignRecipients)
+      .values(recipientRows.slice(i, i + CHUNK))
+      .onConflictDoNothing({ target: [schema.campaignRecipients.campaignId, schema.campaignRecipients.leadId] });
   }
+  let inserted = recipientRows.length;
 
   /* Seedlist insertion for validation campaigns. */
   if (filter.insertSeedlist || camp.kind !== 'standard') {

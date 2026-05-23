@@ -3,7 +3,7 @@
  * obvious. Each handler is small and delegates to a service in `./services`.
  */
 import type { FastifyInstance } from 'fastify';
-import { and, eq, desc, sql, isNull, gte, inArray } from 'drizzle-orm';
+import { and, eq, desc, sql, isNull, gte, inArray, lt } from 'drizzle-orm';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { getDb } from '@keres/db';
 import { schema } from '@keres/db';
@@ -33,19 +33,37 @@ import { importLicenseCsv } from './services/license-importer.js';
 import { toCsv, csvResponse } from './services/csv.js';
 import { writeAudit } from './services/audit.js';
 import { generateWizard, saveStepNotes } from './services/wizard.js';
+import {
+  aggregateSignalOutcomes, proposeScoringChanges,
+  applyScoringProposal, rejectScoringProposal,
+} from './services/closed-loop.js';
+import { refreshWebsiteIntelForLead } from './services/website-intel.js';
+import { emitEvent } from './services/events.js';
 
-/* Get the single-tenant org id from env / db. */
+/* Get the single-tenant org id from env / db — cached for 60s to avoid per-request DB lookup. */
+let _cachedOrgId: string | null = null;
+let _cachedOrgIdAt = 0;
 async function singleOrgId(): Promise<string> {
+  const now = Date.now();
+  if (_cachedOrgId && now - _cachedOrgIdAt < 60_000) return _cachedOrgId;
   const db = getDb();
   const rows = await db.select({ id: schema.organizations.id }).from(schema.organizations).limit(1);
-  if (rows[0]) return rows[0].id;
-  throw new Error('No organization configured. Run `pnpm db:seed` first.');
+  if (!rows[0]) throw new Error('No organization configured. Run `pnpm db:seed` first.');
+  _cachedOrgId = rows[0].id;
+  _cachedOrgIdAt = now;
+  return _cachedOrgId;
 }
 
 /* UUID v4 / general 36-char form: 8-4-4-4-12 hex with dashes.
    Used by the global :id guard below to convert what would be a 500
    ("invalid input syntax for type uuid") into a clean 404. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/* Per-org in-memory rate limiter: max 120 mutation requests per minute.
+   No Redis required — Map is reset on restart which is acceptable for MVP. */
+const _orgRateMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT_RPM = 120;
+const RATE_LIMIT_WINDOW_MS = 60_000;
 
 export function registerRoutes(app: FastifyInstance) {
   const cfg = getConfig();
@@ -72,6 +90,28 @@ export function registerRoutes(app: FastifyInstance) {
         param: k,
         hint: 'expected a UUID',
       });
+    }
+  });
+
+  /* Per-org rate limiting for mutation endpoints. Webhooks are excluded
+     because they receive bursts from SES/Postmark that must not be throttled. */
+  app.addHook('preHandler', async (req, reply) => {
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return;
+    if (!req.url.startsWith('/api/')) return;
+    if (req.url.startsWith('/api/webhooks/') || req.url.startsWith('/api/unsubscribe')) return;
+    const orgId = await singleOrgId().catch(() => null);
+    if (!orgId) return;
+    const now = Date.now();
+    let bucket = _orgRateMap.get(orgId);
+    if (!bucket || now >= bucket.resetAt) {
+      bucket = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+      _orgRateMap.set(orgId, bucket);
+    }
+    bucket.count++;
+    if (bucket.count > RATE_LIMIT_RPM) {
+      const retryAfter = Math.ceil((bucket.resetAt - now) / 1000);
+      reply.code(429).send({ ok: false, error: 'rate_limited', retryAfter });
+      return;
     }
   });
 
@@ -279,7 +319,15 @@ export function registerRoutes(app: FastifyInstance) {
     if (!lead) return { ok: false, error: 'not_found' };
     const signals = (await db.select().from(schema.leadSignals).where(eq(schema.leadSignals.leadId, id)).limit(1))[0] ?? null;
     const events = await db.select().from(schema.leadSourceEvents).where(eq(schema.leadSourceEvents.leadId, id));
-    return { ok: true, lead, signals, events };
+    const intel = (await db.select().from(schema.websiteIntel).where(eq(schema.websiteIntel.leadId, id)).limit(1))[0] ?? null;
+    return { ok: true, lead, signals, events, intel };
+  });
+
+  app.post('/api/leads/:id/refresh-intel', async (req) => {
+    const { id } = req.params as { id: string };
+    const r = await refreshWebsiteIntelForLead(getDb(), id);
+    await writeAudit('website_intel_refresh', id, { ok: r.ok, reason: r.reason ?? null }, req);
+    return r;
   });
 
   app.patch('/api/leads/:id', async (req) => {
@@ -413,7 +461,11 @@ export function registerRoutes(app: FastifyInstance) {
       status: 'running', launchedAt: new Date(),
     }).where(eq(schema.campaigns.id, id));
     await writeAudit('launch', id, { name: camp.name, kind: camp.kind, recipients: camp.recipientCount, overridden: !!body.override?.reason }, req);
-    const sent = await sendBatch(db, { campaignId: id, maxToSend: 5 });
+    const orgId2 = await singleOrgId();
+    await emitEvent(db, orgId2, 'campaign.launched', 'campaign', id, {
+      name: camp.name, kind: camp.kind, recipientCount: camp.recipientCount,
+    });
+    const sent = await sendBatch(db, { campaignId: id, maxToSend: cfg.queue.sendBatchSize });
     return { ok: true, gate, sent };
   });
 
@@ -439,6 +491,134 @@ export function registerRoutes(app: FastifyInstance) {
       seedlistTtlHours: 24 * 7,
     });
     return { ok: true, gate };
+  });
+
+  /* ────────────── Reply-branch outcomes ────────────── */
+  app.post('/api/reply-branches/:id/won', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { outcomeType, revenueUsd } = (req.body ?? {}) as { outcomeType?: string; revenueUsd?: number };
+    const db = getDb();
+    const row = (await db.select({ id: schema.replyBranchStates.id })
+      .from(schema.replyBranchStates)
+      .where(eq(schema.replyBranchStates.id, id))
+      .limit(1))[0];
+    if (!row) return reply.code(404).send({ ok: false, error: 'not_found' });
+    const rbsFull = (await db.select().from(schema.replyBranchStates).where(eq(schema.replyBranchStates.id, id)).limit(1))[0]!;
+    await db.update(schema.replyBranchStates).set({
+      node: 'won',
+      wonAt: new Date(),
+      wonOutcomeType: outcomeType ?? 'manual',
+      wonRevenueUsd: revenueUsd ?? null,
+      updatedAt: new Date(),
+    }).where(eq(schema.replyBranchStates.id, id));
+    await writeAudit('reply_branch_won', id, { outcomeType: outcomeType ?? 'manual', revenueUsd: revenueUsd ?? null });
+    await emitEvent(db, rbsFull.orgId, 'reply_branch.won', 'reply_branch', id, {
+      leadId: rbsFull.leadId, campaignId: rbsFull.campaignId,
+      outcomeType: outcomeType ?? 'manual', revenueUsd: revenueUsd ?? null,
+    });
+    if (rbsFull.leadId) {
+      await emitEvent(db, rbsFull.orgId, 'lead.won', 'lead', rbsFull.leadId, {
+        replyBranchId: id, outcomeType: outcomeType ?? 'manual', revenueUsd: revenueUsd ?? null,
+      });
+    }
+    return { ok: true };
+  });
+
+  /* ────────────── Revenue attribution ────────────── */
+  app.get('/api/revenue', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+
+    const [funnelRows, wonRows] = await Promise.all([
+      /* Funnel counts from campaign_recipients */
+      db.select({
+        state: schema.campaignRecipients.state,
+        cnt: sql<number>`count(*)::int`,
+      }).from(schema.campaignRecipients)
+        .where(eq(schema.campaignRecipients.orgId, orgId))
+        .groupBy(schema.campaignRecipients.state),
+
+      /* Won rows with optional revenue */
+      db.select({
+        id: schema.replyBranchStates.id,
+        campaignId: schema.replyBranchStates.campaignId,
+        leadId: schema.replyBranchStates.leadId,
+        wonAt: schema.replyBranchStates.wonAt,
+        wonOutcomeType: schema.replyBranchStates.wonOutcomeType,
+        wonRevenueUsd: schema.replyBranchStates.wonRevenueUsd,
+      }).from(schema.replyBranchStates)
+        .where(and(
+          eq(schema.replyBranchStates.orgId, orgId),
+          eq(schema.replyBranchStates.node, 'won'),
+        )),
+    ]);
+
+    const funnelMap: Record<string, number> = {};
+    for (const r of funnelRows) funnelMap[r.state] = Number(r.cnt);
+
+    /* Engaged = reply_branch_states rows currently in 'engaged' or beyond */
+    const engagedCount = await db.select({ cnt: sql<number>`count(*)::int` })
+      .from(schema.replyBranchStates)
+      .where(and(
+        eq(schema.replyBranchStates.orgId, orgId),
+        sql`${schema.replyBranchStates.node} IN ('engaged','asked_for_info','scheduling','won')`,
+      ));
+
+    /* Revenue by campaign */
+    const byCampaign: Record<string, { won: number; revenueUsd: number }> = {};
+    for (const w of wonRows) {
+      const cid = w.campaignId ?? 'unknown';
+      if (!byCampaign[cid]) byCampaign[cid] = { won: 0, revenueUsd: 0 };
+      byCampaign[cid].won++;
+      byCampaign[cid].revenueUsd += w.wonRevenueUsd ?? 0;
+    }
+
+    /* Revenue by niche — join leads */
+    const wonLeadIds = wonRows.map(w => w.leadId);
+    const wonLeads = wonLeadIds.length > 0
+      ? await db.select({ id: schema.leads.id, niche: schema.leads.niche })
+          .from(schema.leads).where(inArray(schema.leads.id, wonLeadIds))
+      : [];
+    const leadNicheMap = new Map(wonLeads.map(l => [l.id, l.niche]));
+    const byNiche: Record<string, { won: number; revenueUsd: number }> = {};
+    for (const w of wonRows) {
+      const niche = leadNicheMap.get(w.leadId) ?? 'unknown';
+      if (!byNiche[niche]) byNiche[niche] = { won: 0, revenueUsd: 0 };
+      byNiche[niche].won++;
+      byNiche[niche].revenueUsd += w.wonRevenueUsd ?? 0;
+    }
+
+    return {
+      ok: true,
+      funnel: {
+        sent: (funnelMap['sent'] ?? 0) + (funnelMap['delivered'] ?? 0),
+        replied: funnelMap['replied'] ?? 0,
+        engaged: Number(engagedCount[0]?.cnt ?? 0),
+        won: wonRows.length,
+      },
+      wonRevenueUsd: wonRows.reduce((s, w) => s + (w.wonRevenueUsd ?? 0), 0),
+      byCampaign: Object.entries(byCampaign).map(([id, v]) => ({ campaignId: id, ...v })),
+      byNiche: Object.entries(byNiche).map(([niche, v]) => ({ niche, ...v })),
+    };
+  });
+
+  /* ────────────── Audit log (paginated) ────────────── */
+  app.get('/api/audit-log', async (req) => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const q = req.query as { limit?: string; before?: string; action?: string };
+    const limit = Math.min(parseInt(q.limit ?? '50', 10), 200);
+    const before = q.before ? new Date(q.before) : new Date();
+    const conds = [
+      eq(schema.auditLog.orgId, orgId),
+      sql`${schema.auditLog.occurredAt} < ${before.toISOString()}`,
+    ];
+    if (q.action) conds.push(eq(schema.auditLog.action, q.action));
+    const rows = await db.select().from(schema.auditLog)
+      .where(and(...conds))
+      .orderBy(desc(schema.auditLog.occurredAt))
+      .limit(limit);
+    return { ok: true, rows, hasMore: rows.length === limit };
   });
 
   /* ────────────── Webhooks ────────────── */
@@ -814,6 +994,184 @@ ${r.ok
     return { ok: true };
   });
 
+  /* ────────────── Dead letter queue ────────────── */
+  app.get('/api/dead-letters', async (req) => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const q = req.query as { limit?: string; includeReplayed?: string };
+    const conds = [eq(schema.deadLetters.orgId, orgId)];
+    if (q.includeReplayed !== 'true') conds.push(isNull(schema.deadLetters.replayedAt));
+    const rows = await db.select().from(schema.deadLetters)
+      .where(and(...conds))
+      .orderBy(desc(schema.deadLetters.archivedAt))
+      .limit(Math.min(Number(q.limit ?? 50) || 50, 200));
+    return { ok: true, rows, total: rows.length };
+  });
+
+  app.post('/api/dead-letters/:id/replay', async (req) => {
+    const { id } = req.params as { id: string };
+    const db = getDb();
+    const row = (await db.select().from(schema.deadLetters).where(eq(schema.deadLetters.id, id)).limit(1))[0];
+    if (!row) return { ok: false, error: 'not_found' };
+    if (!row.recipientId) return { ok: false, error: 'no_recipient' };
+    /* Reset the recipient back to pending so the next sendBatch tick picks it up. */
+    await db.update(schema.campaignRecipients).set({
+      state: 'pending', retryCount: 0, nextSendAt: null, skipReason: null,
+    }).where(eq(schema.campaignRecipients.id, row.recipientId));
+    await db.update(schema.deadLetters).set({
+      replayedAt: new Date(),
+      replayCount: sql`${schema.deadLetters.replayCount} + 1`,
+    }).where(eq(schema.deadLetters.id, id));
+    await writeAudit('dead_letter_replay', id, { recipientId: row.recipientId, replayCount: (row.replayCount ?? 0) + 1 }, req);
+    return { ok: true };
+  });
+
+  /* ────────────── Sender mailbox reputation trend ────────────── */
+  app.get('/api/sender-mailboxes/:id/reputation-trend', async (req) => {
+    const { id } = req.params as { id: string };
+    const db = getDb();
+    const rows = await db.select({
+      date: schema.senderReputationDaily.date,
+      sent: schema.senderReputationDaily.sent,
+      bounced: schema.senderReputationDaily.bounced,
+      complained: schema.senderReputationDaily.complained,
+      reputationScore: schema.senderReputationDaily.reputationScore,
+    }).from(schema.senderReputationDaily)
+      .where(eq(schema.senderReputationDaily.mailboxId, id))
+      .orderBy(desc(schema.senderReputationDaily.date))
+      .limit(14);
+    const last3 = rows.slice(0, 3).map(r => r.reputationScore);
+    const prev7 = rows.slice(3, 10).map(r => r.reputationScore);
+    const avg = (arr: number[]) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+    const avgRecent = avg(last3);
+    const avgPrior = avg(prev7);
+    const trend = (avgRecent !== null && avgPrior !== null) ? avgRecent - avgPrior : null;
+    const direction = trend === null ? 'insufficient_data'
+                    : trend > 3 ? 'improving'
+                    : trend < -3 ? 'declining'
+                    : 'stable';
+    return { ok: true, rows, trend: { direction, deltaPoints: trend !== null ? Math.round(trend) : null, avgRecent, avgPrior } };
+  });
+
+  /* ────────────── Global operator dashboard ────────────── */
+  app.get('/api/dashboard', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+
+    const [
+      campaignStatusRows,
+      queueRow,
+      dlqRow,
+      mailboxRows,
+      proposalRow,
+      funnelRows,
+      recentActivity,
+      recentSignals,
+    ] = await Promise.all([
+      /* Campaign status breakdown */
+      db.select({ status: schema.campaigns.status, cnt: sql<number>`count(*)::int` })
+        .from(schema.campaigns).where(eq(schema.campaigns.orgId, orgId))
+        .groupBy(schema.campaigns.status),
+
+      /* Queue depth: pending campaign recipients */
+      db.select({ cnt: sql<number>`count(*)::int` })
+        .from(schema.campaignRecipients)
+        .where(and(eq(schema.campaignRecipients.orgId, orgId), eq(schema.campaignRecipients.state, 'pending'))),
+
+      /* DLQ unresolved */
+      db.select({ cnt: sql<number>`count(*)::int` })
+        .from(schema.deadLetters)
+        .where(and(eq(schema.deadLetters.orgId, orgId), isNull(schema.deadLetters.replayedAt))),
+
+      /* Mailbox health */
+      db.select({
+        state: schema.senderMailboxes.state,
+        cnt: sql<number>`count(*)::int`,
+        avgRep: sql<number>`avg(reputation_score)::int`,
+      }).from(schema.senderMailboxes).where(eq(schema.senderMailboxes.orgId, orgId))
+        .groupBy(schema.senderMailboxes.state),
+
+      /* Pending scoring proposals */
+      db.select({ cnt: sql<number>`count(*)::int` })
+        .from(schema.scoringProposals)
+        .where(and(eq(schema.scoringProposals.orgId, orgId), eq(schema.scoringProposals.status, 'pending'))),
+
+      /* Engagement funnel */
+      db.select({ state: schema.campaignRecipients.state, cnt: sql<number>`count(*)::int` })
+        .from(schema.campaignRecipients).where(eq(schema.campaignRecipients.orgId, orgId))
+        .groupBy(schema.campaignRecipients.state),
+
+      /* Recent audit activity */
+      db.select({ action: schema.auditLog.action, target: schema.auditLog.target, occurredAt: schema.auditLog.occurredAt })
+        .from(schema.auditLog).where(eq(schema.auditLog.orgId, orgId))
+        .orderBy(desc(schema.auditLog.occurredAt)).limit(10),
+
+      /* Recent high-lift signal outcomes */
+      db.select({
+        signalKey: schema.signalOutcomes.signalKey,
+        signalValue: schema.signalOutcomes.signalValue,
+        nSent: schema.signalOutcomes.nSent,
+        nReplied: schema.signalOutcomes.nReplied,
+        nWon: schema.signalOutcomes.nWon,
+        computedAt: schema.signalOutcomes.computedAt,
+      }).from(schema.signalOutcomes).where(eq(schema.signalOutcomes.orgId, orgId))
+        .orderBy(desc(schema.signalOutcomes.computedAt)).limit(5),
+    ]);
+
+    const campMap: Record<string, number> = {};
+    for (const r of campaignStatusRows) campMap[r.status] = Number(r.cnt);
+    const funnelMap: Record<string, number> = {};
+    for (const r of funnelRows) funnelMap[r.state] = Number(r.cnt);
+
+    return {
+      ok: true,
+      campaigns: {
+        running: campMap.running ?? 0,
+        paused: campMap.paused ?? 0,
+        draft: campMap.draft ?? 0,
+        completed: campMap.completed ?? 0,
+        failed: campMap.failed ?? 0,
+      },
+      queue: {
+        depth: Number(queueRow[0]?.cnt ?? 0),
+        dlqUnresolved: Number(dlqRow[0]?.cnt ?? 0),
+      },
+      mailboxes: mailboxRows.map(m => ({
+        state: m.state,
+        count: Number(m.cnt),
+        avgReputation: Number(m.avgRep ?? 0),
+      })),
+      scoring: {
+        pendingProposals: Number(proposalRow[0]?.cnt ?? 0),
+      },
+      funnel: {
+        pending: funnelMap.pending ?? 0,
+        sent: (funnelMap.sent ?? 0) + (funnelMap.delivered ?? 0),
+        replied: funnelMap.replied ?? 0,
+        skipped: funnelMap.skipped ?? 0,
+        failed: funnelMap.failed ?? 0,
+      },
+      recentSignals,
+      recentActivity,
+    };
+  });
+
+  /* ────────────── Domain events (event sourcing log) ────────────── */
+  app.get('/api/domain-events', async (req) => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const q = req.query as { aggregateType?: string; aggregateId?: string; limit?: string; before?: string };
+    const conds = [eq(schema.domainEvents.orgId, orgId)];
+    if (q.aggregateType) conds.push(eq(schema.domainEvents.aggregateType, q.aggregateType));
+    if (q.aggregateId) conds.push(eq(schema.domainEvents.aggregateId, q.aggregateId));
+    if (q.before) conds.push(lt(schema.domainEvents.occurredAt, new Date(q.before)));
+    const rows = await db.select().from(schema.domainEvents)
+      .where(and(...conds))
+      .orderBy(desc(schema.domainEvents.occurredAt))
+      .limit(Math.min(Number(q.limit ?? 50) || 50, 500));
+    return { ok: true, rows, hasMore: rows.length === Math.min(Number(q.limit ?? 50) || 50, 500) };
+  });
+
   /* ────────────── Misc helpers ────────────── */
   app.get('/api/niches', async () => ({ ok: true, niches: ALL_NICHES }));
 
@@ -916,6 +1274,136 @@ ${r.ok
       .where(and(...conds))
       .orderBy(desc(schema.auditLog.occurredAt))
       .limit(Math.min(Number(q.limit ?? 200) || 200, 1000));
+    return { ok: true, rows };
+  });
+
+  /* ────────────── Queue metrics ────────────── */
+  app.get('/api/queue/metrics', async () => {
+    const { getQueue } = await import('./services/queue.js');
+    try {
+      const q = getQueue();
+      const metrics = await q.sampleMetrics(getDb());
+      return { ok: true, metrics };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  });
+
+  app.get('/api/queue/snapshots', async (req) => {
+    const db = getDb();
+    const q = req.query as Record<string, string | undefined>;
+    const rows = await db.select().from(schema.queueMetricsSnapshots)
+      .orderBy(desc(schema.queueMetricsSnapshots.sampledAt))
+      .limit(Math.min(Number(q.limit ?? 100) || 100, 1000));
+    return { ok: true, rows };
+  });
+
+  /* ────────────── Sender mailboxes (rotation pool) ────────────── */
+  app.get('/api/sender-mailboxes', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const rows = await db.select().from(schema.senderMailboxes)
+      .where(eq(schema.senderMailboxes.orgId, orgId))
+      .orderBy(desc(schema.senderMailboxes.createdAt));
+    return { ok: true, rows };
+  });
+
+  app.post('/api/sender-mailboxes', async (req) => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const b = req.body as { senderDomainId: string; fromEmail: string; fromName: string; replyTo?: string; warmupPlanId?: string };
+    if (!b.senderDomainId || !b.fromEmail || !b.fromName) return { ok: false, error: 'missing_required' };
+    const r = await db.insert(schema.senderMailboxes).values({
+      orgId, senderDomainId: b.senderDomainId,
+      fromEmail: b.fromEmail.toLowerCase(),
+      fromName: b.fromName, replyTo: b.replyTo?.toLowerCase() ?? null,
+      warmupPlanId: b.warmupPlanId ?? null,
+      state: 'warming',
+    }).returning({ id: schema.senderMailboxes.id });
+    await writeAudit('sender_mailbox_create', r[0]?.id ?? null, { fromEmail: b.fromEmail }, req);
+    return { ok: true, id: r[0]?.id };
+  });
+
+  app.patch('/api/sender-mailboxes/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const b = req.body as { state?: string; pauseReason?: string | null; warmupPlanId?: string | null };
+    const allowed: Record<string, unknown> = {};
+    if (b.state !== undefined) allowed.state = b.state;
+    if (b.pauseReason !== undefined) allowed.pauseReason = b.pauseReason;
+    if (b.warmupPlanId !== undefined) allowed.warmupPlanId = b.warmupPlanId;
+    if (b.state === 'warming' || b.state === 'active') allowed.cooldownUntil = null;
+    await getDb().update(schema.senderMailboxes).set(allowed as any).where(eq(schema.senderMailboxes.id, id));
+    await writeAudit('sender_mailbox_update', id, allowed as Record<string, unknown>, req);
+    return { ok: true };
+  });
+
+  /* ────────────── Warmup plans ────────────── */
+  app.get('/api/warmup-plans', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const rows = await db.select().from(schema.warmupPlans).where(eq(schema.warmupPlans.orgId, orgId));
+    return { ok: true, rows };
+  });
+
+  app.post('/api/warmup-plans', async (req) => {
+    const orgId = await singleOrgId();
+    const b = req.body as { name: string; dailyCaps: number[]; pauseBouncePct?: number; pauseComplaintPct?: number; minReputationToAdvance?: number; isDefault?: boolean };
+    if (!b.name || !Array.isArray(b.dailyCaps) || b.dailyCaps.length < 7) {
+      return { ok: false, error: 'invalid_plan' };
+    }
+    const r = await getDb().insert(schema.warmupPlans).values({
+      orgId, name: b.name, dailyCaps: b.dailyCaps,
+      pauseBouncePct: b.pauseBouncePct ?? 4,
+      pauseComplaintPct: b.pauseComplaintPct ?? 0.1,
+      minReputationToAdvance: b.minReputationToAdvance ?? 40,
+      isDefault: !!b.isDefault,
+    }).returning({ id: schema.warmupPlans.id });
+    return { ok: true, id: r[0]?.id };
+  });
+
+  /* ────────────── Closed-loop scoring ────────────── */
+  app.get('/api/scoring/proposals', async (req) => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const q = req.query as Record<string, string | undefined>;
+    const conds = [eq(schema.scoringProposals.orgId, orgId)];
+    if (q.status) conds.push(eq(schema.scoringProposals.status, q.status));
+    const rows = await db.select().from(schema.scoringProposals)
+      .where(and(...conds))
+      .orderBy(desc(schema.scoringProposals.proposedAt))
+      .limit(Math.min(Number(q.limit ?? 50) || 50, 200));
+    return { ok: true, rows };
+  });
+
+  app.post('/api/scoring/proposals/refresh', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { windowDays?: number };
+    const agg = await aggregateSignalOutcomes(getDb(), orgId, b.windowDays ?? 30);
+    const prop = await proposeScoringChanges(getDb(), orgId, b.windowDays ?? 30);
+    await writeAudit('closed_loop_refresh', null, { windowDays: b.windowDays ?? 30, signals: agg.written, proposalId: prop.proposalId }, req);
+    return { ok: true, signalsWritten: agg.written, proposalId: prop.proposalId, evidenceCount: prop.proposal.evidence.length };
+  });
+
+  app.post('/api/scoring/proposals/:id/apply', async (req) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as { reason?: string };
+    const r = await applyScoringProposal(getDb(), id, { reason: b.reason });
+    return r;
+  });
+
+  app.post('/api/scoring/proposals/:id/reject', async (req) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as { reason?: string };
+    if (!b.reason) return { ok: false, error: 'missing_reason' };
+    return rejectScoringProposal(getDb(), id, b.reason);
+  });
+
+  app.get('/api/scoring/versions', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const rows = await db.select().from(schema.scoringVersions)
+      .where(eq(schema.scoringVersions.orgId, orgId))
+      .orderBy(desc(schema.scoringVersions.id));
     return { ok: true, rows };
   });
 

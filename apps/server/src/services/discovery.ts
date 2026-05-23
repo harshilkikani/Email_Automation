@@ -7,10 +7,10 @@ import { eq } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import {
-  addToIndex, checkDuplicate, makeIndex, scoreLead, hardFilter,
+  addToIndex, checkDuplicate, makeIndex, hardFilter,
   type Niche, type ScoringInputs, type WebPresenceLevel,
-  SCORING_VERSION_V1,
 } from '@keres/core';
+import { scoreLeadEnhanced } from './scoring.js';
 import {
   OsmAdapter, OsmSampleAdapter, type DiscoveryProvider,
   YelpAdapter, Scraper, classifyPhone, LicenseRegistry,
@@ -119,7 +119,12 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
       isResidentialAddress: false,
       deadDomain: probe.deadDomain,
     };
-    const scored = scoreLead(inputs, SCORING_VERSION_V1);
+    const scored = await scoreLeadEnhanced(db, inputs, {
+      orgId: input.orgId,
+      postalCode: cand.postalCode,
+      city: cand.city,
+      state: cand.state,
+    });
 
     const inserted2 = await db.insert(schema.leads).values({
       orgId: input.orgId,

@@ -266,6 +266,7 @@ export interface RenderContext {
   signals: Pick<ScoringInputs, 'webPresenceLevel' | 'isStormZone' | 'niche' | 'hasOnlineBooking'>;
   fromName: string;
   fromSignoff?: string;
+  subjectOverrides?: string[];
 }
 
 export interface RenderedEmail {
@@ -308,7 +309,10 @@ export function renderEmail(template: Template, ctx: RenderContext): RenderedEma
   const slotKey = pickSlot(ctx.signals);
   const openers = template.openerVariants[slotKey] ?? template.openerVariants.default;
   const opener = pickByHash(openers, seed);
-  const subject = pickByHash(template.subjectVariants, seed + 1n);
+  const variants = ctx.subjectOverrides && ctx.subjectOverrides.length > 0
+    ? ctx.subjectOverrides
+    : template.subjectVariants;
+  const subject = pickByHash(variants, seed + 1n);
   const pain = pickByHash(template.painVariants, seed + 2n);
 
   /* Two-pass: opener / pain first (may themselves contain {{business}} or {{city}}),

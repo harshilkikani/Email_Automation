@@ -13,6 +13,7 @@ import rateLimit from '@fastify/rate-limit';
 import { getConfig } from './config.js';
 import { registerAuth } from './auth.js';
 import { registerRoutes } from './routes.js';
+import { registerPerOrgRateLimit } from './services/per-org-rate-limit.js';
 
 export async function buildTestApp(): Promise<FastifyInstance> {
   const cfg = getConfig();
@@ -26,6 +27,7 @@ export async function buildTestApp(): Promise<FastifyInstance> {
   /* Rate limit kept enabled but with high caps so tests never trigger 429. */
   await app.register(rateLimit, { global: false, max: 10_000, timeWindow: '1 minute', skipOnError: true });
   registerAuth(app);
+  registerPerOrgRateLimit(app);
   registerRoutes(app);
   /* Mirror the production setNotFoundHandler from index.ts so integration
      tests observe the same 404 JSON shape as deployed traffic. The SPA

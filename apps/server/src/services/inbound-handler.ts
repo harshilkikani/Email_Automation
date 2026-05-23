@@ -7,6 +7,7 @@ import { schema } from '@keres/db';
 import { classifyReply } from '@keres/core';
 import { parseSnsNotification, shouldAutoSuppress } from '@keres/providers';
 import type { InboundEvent } from '@keres/providers';
+import { onInboundReply } from './reply-branches.js';
 
 /** Persist an SES SNS notification batch. Returns counts for the test harness. */
 export async function handleSesSns(db: Database, orgId: string, body: any): Promise<{ subscribed: boolean; events: number; suppressed: number; subscribeUrl?: string }> {
@@ -41,7 +42,7 @@ export async function handleSesSns(db: Database, orgId: string, body: any): Prom
     events++;
 
     if (recipient) {
-      const nextState = ev.eventType === 'bounce' ? 'bounced'
+      const nextState = (ev.eventType === 'bounce' && ev.bounceType === 'hard') ? 'bounced'
                       : ev.eventType === 'complaint' ? 'complained'
                       : ev.eventType === 'delivered' ? 'delivered'
                       : recipient.state;
@@ -129,6 +130,13 @@ export async function handleInboundReply(db: Database, orgId: string, ev: Inboun
     }
   } else if (classified.intent === 'interested' || classified.intent === 'conditional') {
     if (lead) await db.update(schema.leads).set({ status: 'interested' }).where(eq(schema.leads.id, lead.id));
+  }
+
+  /* Drive the reply-branch FSM. Best-effort — surfaced errors do not block
+     the inbound webhook ack. */
+  if (inserted[0]?.id) {
+    try { await onInboundReply(db, inserted[0]!.id); }
+    catch { /* swallow; tick will catch up */ }
   }
 
   return { id: inserted[0]?.id ?? '', intent: classified.intent };
