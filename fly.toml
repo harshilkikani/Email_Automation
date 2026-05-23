@@ -1,0 +1,50 @@
+# fly.toml app configuration file generated for keres-ops on 2026-05-18T19:00:29-05:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'keres-ops'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'apps/server/Dockerfile'
+
+[deploy]
+  # Runs in a release VM with the new image before traffic shifts. Idempotent —
+  # `packages/db/migrate.ts` skips migrations already in `_keres_migrations`.
+  release_command = 'node packages/db/dist/migrate.js'
+
+[env]
+  NODE_ENV = 'production'
+  PORT = '8080'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[checks]
+  [checks.health]
+    port = 8080
+    type = 'http'
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '30s'
+    method = 'GET'
+    path = '/api/health'
+
+  [checks.ready]
+    port = 8080
+    type = 'http'
+    interval = '1m0s'
+    timeout = '10s'
+    grace_period = '1m0s'
+    method = 'GET'
+    path = '/api/ready'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'

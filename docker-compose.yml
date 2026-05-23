@@ -1,0 +1,39 @@
+# Local development. One Postgres container + the API server reading from .env.
+# Compose v2 ignores the `version` key, so we omit it.
+# Web frontend is run separately with `pnpm --filter @keres/web dev`.
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: keres-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: keres
+    ports:
+      - "5432:5432"
+    volumes:
+      - keres_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d keres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Optional: API server. Comment in if you want a fully-containerised dev loop.
+  # server:
+  #   build:
+  #     context: .
+  #     dockerfile: apps/server/Dockerfile
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   env_file: .env
+  #   environment:
+  #     DATABASE_URL: postgres://postgres:postgres@postgres:5432/keres
+  #     SAMPLE_MODE: "true"
+  #   ports:
+  #     - "8080:8080"
+
+volumes:
+  keres_pg_data:

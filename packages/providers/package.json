@@ -1,0 +1,42 @@
+{
+  "name": "@keres/providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/providers/src/index.js",
+  "types": "dist/providers/src/index.d.ts",
+  "exports": {
+    ".":           { "types": "./dist/providers/src/index.d.ts",          "default": "./dist/providers/src/index.js" },
+    "./osm":       { "types": "./dist/providers/src/osm.d.ts",            "default": "./dist/providers/src/osm.js" },
+    "./yelp":      { "types": "./dist/providers/src/yelp.d.ts",           "default": "./dist/providers/src/yelp.js" },
+    "./noaa":      { "types": "./dist/providers/src/noaa.d.ts",           "default": "./dist/providers/src/noaa.js" },
+    "./census":    { "types": "./dist/providers/src/census.d.ts",         "default": "./dist/providers/src/census.js" },
+    "./licenses":  { "types": "./dist/providers/src/licenses/index.d.ts", "default": "./dist/providers/src/licenses/index.js" },
+    "./hunter":    { "types": "./dist/providers/src/hunter.d.ts",         "default": "./dist/providers/src/hunter.js" },
+    "./bouncer":   { "types": "./dist/providers/src/bouncer.d.ts",        "default": "./dist/providers/src/bouncer.js" },
+    "./ses":       { "types": "./dist/providers/src/ses.d.ts",            "default": "./dist/providers/src/ses.js" },
+    "./inbound":   { "types": "./dist/providers/src/inbound.d.ts",        "default": "./dist/providers/src/inbound.js" },
+    "./scraper":   { "types": "./dist/providers/src/scraper.d.ts",        "default": "./dist/providers/src/scraper.js" },
+    "./phone":     { "types": "./dist/providers/src/phone.d.ts",          "default": "./dist/providers/src/phone.js" },
+    "./verify":    { "types": "./dist/providers/src/verify.d.ts",         "default": "./dist/providers/src/verify.js" }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ses": "^3.620.0",
+    "@aws-sdk/client-sesv2": "^3.620.0",
+    "@aws-sdk/client-sns": "^3.620.0",
+    "@keres/core": "workspace:*",
+    "cheerio": "^1.0.0-rc.12",
+    "google-libphonenumber": "^3.2.34",
+    "undici": "^6.19.5"
+  },
+  "devDependencies": {
+    "@types/google-libphonenumber": "^7.4.30",
+    "@types/node-forge": "^1.3.11",
+    "node-forge": "^1.3.1",
+    "typescript": "^5.5.4"
+  }
+}

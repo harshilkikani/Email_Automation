@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": false,
+    "useDefineForClassFields": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@keres/db": ["./packages/db/src/index.ts"],
+      "@keres/db/*": ["./packages/db/src/*"],
+      "@keres/core": ["./packages/core/src/index.ts"],
+      "@keres/core/*": ["./packages/core/src/*"],
+      "@keres/providers": ["./packages/providers/src/index.ts"],
+      "@keres/providers/*": ["./packages/providers/src/*"],
+      "@keres/email": ["./packages/email/src/index.ts"],
+      "@keres/email/*": ["./packages/email/src/*"]
+    }
+  },
+  "exclude": ["node_modules", "dist", "build"]
+}

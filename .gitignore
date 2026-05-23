@@ -1,0 +1,38 @@
+# dependencies + build
+node_modules
+dist
+build
+.vite
+.pnpm-store
+
+# tests + coverage
+coverage
+
+# secrets + envs (NEVER commit; templates ending in .example are allowed)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# local operator secret files (kept in user $HOME but also blocked here
+# in case anyone copies one into the working tree by accident)
+.keres-neon.json
+.keres-secrets.env
+keres-secrets.*
+*.keres-creds*
+
+# OS / editor / agent
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+.claude
+
+# logs + caches
+*.log
+.cache
+
+# misc
+*.tgz
+*.tar.gz
+data/
