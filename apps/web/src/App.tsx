@@ -42,7 +42,7 @@ function Login({ onAuth }: { onAuth: () => void }) {
           <h2 className="modal-title">Keres AI sign-in</h2>
         </div>
         <div className="modal-body">
-          <p className="panel-desc">Enter the internal access token (from your <code>.env</code>).</p>
+          <p className="panel-desc">Enter the access token to sign in.</p>
           <div className="field" style={{ marginTop: 14 }}>
             <label className="field-label">Access token</label>
             <input className="field-input" type="password" value={token} onChange={e => setToken(e.target.value)} />
@@ -88,6 +88,13 @@ export default function App() {
     </div>
   ) : null;
 
+  if (authed === null) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Inter, sans-serif', color: '#888', fontSize: 15 }}>
+        Loading…
+      </div>
+    );
+  }
   if (authed === false) {
     return (
       <ToastProvider>
@@ -95,7 +102,6 @@ export default function App() {
       </ToastProvider>
     );
   }
-  if (authed === null) return null;
 
   return (
     <ToastProvider>
