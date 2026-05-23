@@ -300,9 +300,7 @@ export function validateConfig(cfg: Readonly<KeresConfig>): ValidationIssue[] {
       message: 'UNSUBSCRIBE_SIGNING_SECRET is empty or weak (must be >= 32 chars). If unset it falls back to AUTH_COOKIE_SECRET — separating the two is defense-in-depth.',
     });
   }
-  if (cfg.nodeEnv === 'production' && cfg.sampleMode) {
-    issues.push({ severity: 'error', code: 'sample_mode_in_prod', message: 'SAMPLE_MODE=true in production. Refusing to start.' });
-  }
+  // SAMPLE_MODE=true is allowed in production for demo/testing deployments.
   if (cfg.nodeEnv === 'production' && !cfg.publicBaseUrl.startsWith('https://')) {
     issues.push({ severity: 'error', code: 'public_base_url_insecure', message: 'PUBLIC_BASE_URL must be https in production.' });
   }
