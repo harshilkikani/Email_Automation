@@ -111,7 +111,7 @@ export async function aggregateSignalOutcomes(
         AND cr.first_sent_at >= ${windowStart.toISOString()}
         AND cr.first_sent_at < ${windowEnd.toISOString()}
     `);
-    const rows = ((res as { rows?: RecipientRow[] }).rows ?? (res as unknown as RecipientRow[])) as RecipientRow[];
+    const rows = ((res as unknown as { rows?: RecipientRow[] }).rows ?? (res as unknown as RecipientRow[])) as RecipientRow[];
 
     /* Bucket by (signalKey, signalValue). Revenue from won deals is accumulated
        per bucket so high-revenue signals get upweighted in proposals. */

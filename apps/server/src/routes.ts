@@ -465,7 +465,7 @@ export function registerRoutes(app: FastifyInstance) {
     await emitEvent(db, orgId2, 'campaign.launched', 'campaign', id, {
       name: camp.name, kind: camp.kind, recipientCount: camp.recipientCount,
     });
-    const sent = await sendBatch(db, { campaignId: id, maxToSend: cfg.sendBatchSize });
+    const sent = await sendBatch(db, { campaignId: id, maxToSend: cfg.queue.sendBatchSize });
     return { ok: true, gate, sent };
   });
 

@@ -192,7 +192,7 @@ export async function tickWebsiteIntelRefresh(db: Database, log: FastifyBaseLogg
     ORDER BY l.score DESC, l.discovered_at DESC
     LIMIT 25
   `);
-  const rows = ((candidates as { rows?: Array<{ id: string }> }).rows ?? []) as Array<{ id: string }>;
+  const rows = ((candidates as unknown as { rows?: Array<{ id: string }> }).rows ?? []) as Array<{ id: string }>;
   let ok = 0, failed = 0;
   for (const r of rows) {
     try {

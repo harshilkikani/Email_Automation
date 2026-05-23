@@ -55,7 +55,7 @@ export async function tickSaturationRefresh(db: Database, log: FastifyBaseLogger
       AND l.deleted_at IS NULL
       AND l.postal_code IS NOT NULL
   `);
-  const rows = ((cells as { rows?: SatCellRow[] }).rows ?? []) as SatCellRow[];
+  const rows = ((cells as unknown as { rows?: SatCellRow[] }).rows ?? []) as SatCellRow[];
 
   /* Group by (orgId, niche, postalCode). */
   type Key = string;
@@ -80,7 +80,7 @@ export async function tickSaturationRefresh(db: Database, log: FastifyBaseLogger
     GROUP BY org_id, niche, postal_code
   `);
   const eligibleCountMap = new Map<string, number>();
-  for (const row of ((eligibleResult as { rows?: Array<{ org_id: string; niche: string; postal_code: string; c: number }> }).rows ?? [])) {
+  for (const row of ((eligibleResult as unknown as { rows?: Array<{ org_id: string; niche: string; postal_code: string; c: number }> }).rows ?? [])) {
     eligibleCountMap.set(`${row.org_id}|${row.niche}|${row.postal_code}`, Number(row.c));
   }
 

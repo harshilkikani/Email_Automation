@@ -56,7 +56,7 @@ export async function rollupDailyReputation(db: Database, dateUtc: string): Prom
         AND ee.occurred_at >= ${startUtc.toISOString()}
         AND ee.occurred_at < ${endUtc.toISOString()}
     `);
-    const c = ((counts as { rows?: Array<{ sent: number; delivered: number; bounced: number; complained: number; replied: number; unsubscribed: number }> }).rows ?? [])[0]
+    const c = ((counts as unknown as { rows?: Array<{ sent: number; delivered: number; bounced: number; complained: number; replied: number; unsubscribed: number }> }).rows ?? [])[0]
             ?? { sent: 0, delivered: 0, bounced: 0, complained: 0, replied: 0, unsubscribed: 0 };
 
     /* Seedlist placement: count seedlist_tests with sentAt on this date, grouped by observed. */
@@ -69,7 +69,7 @@ export async function rollupDailyReputation(db: Database, dateUtc: string): Prom
         AND sent_at >= ${startUtc.toISOString()}
         AND sent_at < ${endUtc.toISOString()}
     `);
-    const sl = ((seedlistAgg as { rows?: Array<{ inbox: number; spam: number }> }).rows ?? [])[0] ?? { inbox: 0, spam: 0 };
+    const sl = ((seedlistAgg as unknown as { rows?: Array<{ inbox: number; spam: number }> }).rows ?? [])[0] ?? { inbox: 0, spam: 0 };
 
     /* Compute end-of-day reputation. Mailbox age in days for the bonus. */
     const ageDays = Math.max(0, Math.floor((Date.now() - mb.createdAt.getTime()) / 86400_000));

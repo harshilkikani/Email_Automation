@@ -18,7 +18,8 @@
  *      gated behind ENABLE_LOCAL_AI=true so a misconfigured env can't
  *      silently spin up an LLM.
  */
-import type { LiftRow, ScoringWeights } from './validation.js';
+import type { LiftRow } from './validation.js';
+import type { ScoringWeights } from './scoring.js';
 import type { Niche } from './types.js';
 
 export type AiOperation =
@@ -299,7 +300,7 @@ Respond ONLY with JSON:
 
     try {
       const raw = await this.complete(prompt);
-      const parsed = extractJsonObject(raw) as AiReplyAnalysis;
+      const parsed = extractJsonObject(raw) as unknown as AiReplyAnalysis;
       if (!parsed.topics) throw new Error('missing_topics');
       return {
         topics: (parsed.topics ?? []).slice(0, 10),
@@ -380,7 +381,7 @@ Respond ONLY with JSON:
 
     try {
       const raw = await this.complete(prompt);
-      const parsed = extractJsonObject(raw) as AiIntelSummary;
+      const parsed = extractJsonObject(raw) as unknown as AiIntelSummary;
       if (!parsed.byNiche) throw new Error('missing_byNiche');
       return {
         byNiche: (parsed.byNiche ?? []).slice(0, niches.size),

@@ -147,7 +147,7 @@ async function tickSendBatch(db: Database, log: FastifyBaseLogger): Promise<unkn
   if (!w.daysOfWeek.includes(utcDay) || utcHour < w.startHour || utcHour >= w.endHour) {
     return { sent: 0, skipped: 0, failed: 0, reason: 'outside_send_window' };
   }
-  const r = await sendBatch(db, { maxToSend: cfg.sendBatchSize });
+  const r = await sendBatch(db, { maxToSend: cfg.queue.sendBatchSize });
   if (r.sent > 0) log.info({ sent: r.sent, skipped: r.skipped, failed: r.failed }, 'sendBatch');
   return r;
 }
@@ -384,7 +384,7 @@ async function tickSendTimeHistogram(db: Database, _log: FastifyBaseLogger): Pro
         AND cr.first_sent_at >= ${windowStart.toISOString()}
       GROUP BY l.niche, utc_hour
     `);
-    const list = ((rows as { rows?: unknown[] }).rows ?? (rows as unknown[])) as Array<{
+    const list = ((rows as unknown as { rows?: unknown[] }).rows ?? (rows as unknown as unknown[])) as Array<{
       niche: string; utc_hour: number; n_sent: number; n_replied: number;
     }>;
     for (const row of list) {

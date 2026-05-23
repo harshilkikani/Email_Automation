@@ -75,7 +75,7 @@ export async function tickReplyBranches(db: Database, log: FastifyBaseLogger): P
       AND cr.state IN ('sent','delivered')
     LIMIT 200
   `);
-  const recipientRows = ((newRows as { rows?: Array<{ recipient_id: string; org_id: string; campaign_id: string; lead_id: string; first_sent_at: Date }> }).rows ?? []) as Array<{ recipient_id: string; org_id: string; campaign_id: string; lead_id: string; first_sent_at: Date }>;
+  const recipientRows = ((newRows as unknown as { rows?: Array<{ recipient_id: string; org_id: string; campaign_id: string; lead_id: string; first_sent_at: Date }> }).rows ?? []) as Array<{ recipient_id: string; org_id: string; campaign_id: string; lead_id: string; first_sent_at: Date }>;
   for (const r of recipientRows) {
     const inserted = await db.insert(schema.replyBranchStates).values({
       orgId: r.org_id, campaignId: r.campaign_id, leadId: r.lead_id, recipientId: r.recipient_id,

@@ -15,18 +15,24 @@ import { randomUUID } from 'node:crypto';
 import { getConfig } from '../config.js';
 import { gateCampaign } from './campaigns.js';
 import { getOutbound } from './sender-factory.js';
-import { pickMailbox, recordSendOutcome } from './sender-rotation.js';
+import { pickMailbox, recordSendOutcome, type PickedMailbox } from './sender-rotation.js';
 import { checkSaturationBeforeSend } from './saturation.js';
 import { emitEvent } from './events.js';
 
 /**
  * Pre-flight decision: all the per-recipient choices that happen before the
  * actual SES call. Extracting this makes the send loop readable and testable.
+ *
+ * `mailbox` is the trimmed `PickedMailbox` (id + identity fields) rather than
+ * the full schema row — `pickMailbox` already selected and reserved capacity,
+ * and downstream callers only need the identity. This also lets us move the
+ * type into `@keres/core` without dragging the server-side Drizzle schema with
+ * it (see CampaignDecision re-export in packages/core).
  */
 export interface CampaignDecision {
   shouldSend: boolean;
   skipReason?: string;
-  mailbox: typeof schema.senderMailboxes.$inferSelect | null;
+  mailbox: PickedMailbox | null;
   template: Template;
   subjectOverrides: string[];
   senderIdentity: { fromName: string; fromEmail: string; replyTo: string };
@@ -39,7 +45,7 @@ function computeDecision(
   org: typeof schema.organizations.$inferSelect,
   _signals: typeof schema.leadSignals.$inferSelect | undefined,
   sat: { action: 'allow' | 'block'; saturationPct: number; reason?: string },
-  mailbox: typeof schema.senderMailboxes.$inferSelect | null,
+  mailbox: PickedMailbox | null,
   cfg: ReturnType<typeof getConfig>,
 ): CampaignDecision {
   if (camp.status !== 'running') return { shouldSend: false, skipReason: 'campaign_not_running', mailbox: null, template: defaultTemplateFor(lead.niche as 'Septic'), subjectOverrides: [], senderIdentity: { fromName: '', fromEmail: '', replyTo: '' } };
