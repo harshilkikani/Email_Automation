@@ -34,6 +34,15 @@ import { runDiscovery } from './discovery.js';
 import { currentWarmupTarget } from './placement.js';
 import { gateCampaign } from './campaigns.js';
 import { writeAudit } from './audit.js';
+import { tickClosedLoop } from './closed-loop.js';
+import { tickWarmupEngine, refillHourlyTokens } from './warmup-engine.js';
+import { tickReplyBranches } from './reply-branches.js';
+import { tickSaturationRefresh } from './saturation.js';
+import { tickWebsiteIntelRefresh } from './website-intel.js';
+import { tickQueueMetrics } from './queue.js';
+import { withSpan } from '../observability.js';
+import { tickAiAnalysis } from './ai-analysis.js';
+import { NoaaAdapter } from '@keres/providers';
 
 type Tick = { name: string; everyMs: number; fn: (db: Database, log: FastifyBaseLogger) => Promise<unknown> };
 
@@ -52,28 +61,43 @@ export function startScheduler(db: Database, log: FastifyBaseLogger): SchedulerH
 
   /* All ticks share the same wall clock; the dispatcher fires anything due. */
   const ticks: Tick[] = [
-    { name: 'send_batch',        everyMs: 15 * 1000,       fn: tickSendBatch },
-    { name: 'auto_pause_check',  everyMs: 60 * 1000,       fn: tickAutoPause },
-    { name: 'domain_rollover',   everyMs: 5  * 60 * 1000,  fn: tickDomainRollover },
-    { name: 'unsub_probe',       everyMs: 15 * 60 * 1000,  fn: tickUnsubProbe },
-    { name: 'dns_recheck',       everyMs: 60 * 60 * 1000,  fn: tickDnsRecheck },
-    { name: 'warmup_ramp',       everyMs: 60 * 60 * 1000,  fn: tickWarmupRamp },
-    { name: 'budget_alert',      everyMs: 60 * 60 * 1000,  fn: tickBudgetAlert },
-    { name: 'discovery_cron',    everyMs: 60 * 60 * 1000,  fn: tickDiscoveryCron },
-    { name: 'license_freshness', everyMs: 24 * 60 * 60 * 1000, fn: tickLicenseFreshness },
+    { name: 'send_batch',         everyMs: 15 * 1000,            fn: tickSendBatch },
+    { name: 'auto_pause_check',   everyMs: 60 * 1000,            fn: tickAutoPause },
+    { name: 'domain_rollover',    everyMs: 5  * 60 * 1000,       fn: tickDomainRollover },
+    { name: 'queue_metrics',      everyMs: 5  * 60 * 1000,       fn: (db, log) => withSpan('tick.queue_metrics',   () => tickQueueMetrics(db, log)) },
+    { name: 'stuck_jobs_cleanup', everyMs: 5  * 60 * 1000,       fn: tickStuckJobsCleanup },
+    { name: 'reply_branches',     everyMs: 5  * 60 * 1000,       fn: (db, log) => withSpan('tick.reply_branches',  () => tickReplyBranches(db, log)) },
+    { name: 'unsub_probe',        everyMs: 15 * 60 * 1000,       fn: tickUnsubProbe },
+    { name: 'warmup_engine',      everyMs: 30 * 60 * 1000,       fn: (db, log) => withSpan('tick.warmup_engine',   () => tickWarmupEngine(db, log)) },
+    { name: 'token_refill',       everyMs: 60 * 60 * 1000,       fn: async (db, _log) => refillHourlyTokens(db) },
+    { name: 'dns_recheck',        everyMs: 60 * 60 * 1000,       fn: tickDnsRecheck },
+    { name: 'warmup_ramp',        everyMs: 60 * 60 * 1000,       fn: tickWarmupRamp },
+    { name: 'budget_alert',       everyMs: 60 * 60 * 1000,       fn: tickBudgetAlert },
+    { name: 'discovery_cron',     everyMs: 60 * 60 * 1000,       fn: tickDiscoveryCron },
+    { name: 'website_intel',      everyMs: 6  * 60 * 60 * 1000,  fn: (db, log) => withSpan('tick.website_intel',   () => tickWebsiteIntelRefresh(db, log)) },
+    { name: 'saturation_refresh', everyMs: 12 * 60 * 60 * 1000,  fn: (db, log) => withSpan('tick.saturation',      () => tickSaturationRefresh(db, log)) },
+    { name: 'send_time_histogram', everyMs: 12 * 60 * 60 * 1000,       fn: tickSendTimeHistogram },
+    { name: 'reputation_trend',   everyMs: 6  * 60 * 60 * 1000,       fn: tickReputationTrend },
+    { name: 'closed_loop',        everyMs: 24 * 60 * 60 * 1000,       fn: (db, log) => withSpan('tick.closed_loop',   () => tickClosedLoop(db, log)) },
+    { name: 'license_freshness',  everyMs: 24 * 60 * 60 * 1000,       fn: tickLicenseFreshness },
+    { name: 'ai_analysis',        everyMs: 7  * 24 * 60 * 60 * 1000,  fn: tickAiAnalysis },
+    { name: 'noaa_refresh',       everyMs: 30 * 24 * 60 * 60 * 1000,  fn: tickNoaaRefresh },
   ];
 
-  const interval = setInterval(async () => {
+  /* Prevent a slow tick from running again before the previous invocation
+     finishes — eliminates the double-send risk on send_batch. */
+  const running = new Set<string>();
+  const interval = setInterval(() => {
     const now = Date.now();
     for (const t of ticks) {
       const last = lastRan.get(t.name) ?? 0;
       if (now - last < t.everyMs) continue;
+      if (running.has(t.name)) continue;
       lastRan.set(t.name, now);
-      try {
-        await runTick(db, log, t);
-      } catch (e: any) {
-        log.error({ err: e, tick: t.name }, 'scheduler tick crashed');
-      }
+      running.add(t.name);
+      runTick(db, log, t)
+        .finally(() => running.delete(t.name))
+        .catch((e: Error) => log.error({ err: e, tick: t.name }, 'scheduler tick crashed'));
     }
   }, 5_000);
 
@@ -115,7 +139,15 @@ async function runTick(db: Database, log: FastifyBaseLogger, t: Tick): Promise<v
 /* ────────── individual ticks ────────── */
 
 async function tickSendBatch(db: Database, log: FastifyBaseLogger): Promise<unknown> {
-  const r = await sendBatch(db, { maxToSend: 5 });
+  const cfg = getConfig();
+  const now = new Date();
+  const utcHour = now.getUTCHours();
+  const utcDay = now.getUTCDay();
+  const w = cfg.sendWindow;
+  if (!w.daysOfWeek.includes(utcDay) || utcHour < w.startHour || utcHour >= w.endHour) {
+    return { sent: 0, skipped: 0, failed: 0, reason: 'outside_send_window' };
+  }
+  const r = await sendBatch(db, { maxToSend: cfg.sendBatchSize });
   if (r.sent > 0) log.info({ sent: r.sent, skipped: r.skipped, failed: r.failed }, 'sendBatch');
   return r;
 }
@@ -279,6 +311,138 @@ async function tickLicenseFreshness(db: Database, log: FastifyBaseLogger): Promi
     log.warn({ stale: count }, 'license rows refreshed > 180 days ago');
   }
   return { staleRows: count };
+}
+
+async function tickNoaaRefresh(db: Database, log: FastifyBaseLogger): Promise<unknown> {
+  const cfg = getConfig();
+  const adapter = new NoaaAdapter({ enabled: true, fetcher: cfg.sampleMode ? undefined : undefined });
+  const events = await adapter.fetchRecent();
+  if (events.length === 0) return { upserted: 0 };
+
+  /* Group events by (postalCode, eventType) to aggregate counts. */
+  const grouped = new Map<string, { postalCode: string; eventType: string; count: number; lastEventAt: Date }>();
+  for (const ev of events) {
+    const key = `${ev.postalCode}|${ev.eventType}`;
+    const row = grouped.get(key);
+    if (row) {
+      row.count++;
+      if (ev.eventDate > row.lastEventAt) row.lastEventAt = ev.eventDate;
+    } else {
+      grouped.set(key, { postalCode: ev.postalCode, eventType: ev.eventType, count: 1, lastEventAt: ev.eventDate });
+    }
+  }
+
+  const now = new Date();
+  for (const row of grouped.values()) {
+    await db.insert(schema.noaaStormZones).values({
+      postalCode: row.postalCode,
+      eventType: row.eventType,
+      eventCount: row.count,
+      lastEventAt: row.lastEventAt,
+      refreshedAt: now,
+    }).onConflictDoUpdate({
+      target: [schema.noaaStormZones.postalCode, schema.noaaStormZones.eventType],
+      set: { eventCount: row.count, lastEventAt: row.lastEventAt, refreshedAt: now },
+    });
+  }
+
+  log.info({ upserted: grouped.size }, 'noaa storm zones refreshed');
+  return { upserted: grouped.size };
+}
+
+async function tickStuckJobsCleanup(db: Database, log: FastifyBaseLogger): Promise<unknown> {
+  const cutoff = new Date(Date.now() - 10 * 60_000);
+  const updated = await db.update(schema.jobRuns).set({
+    status: 'failed',
+    error: 'timeout: still running after 10 min (likely crashed mid-execution)',
+    completedAt: new Date(),
+  }).where(and(
+    eq(schema.jobRuns.status, 'running'),
+    lt(schema.jobRuns.startedAt, cutoff),
+  )).returning({ id: schema.jobRuns.id });
+  if (updated.length > 0) log.warn({ count: updated.length }, 'cleaned up stuck job_runs');
+  return { cleaned: updated.length };
+}
+
+async function tickSendTimeHistogram(db: Database, _log: FastifyBaseLogger): Promise<unknown> {
+  /* Compute per-niche per-UTC-hour reply rates from the last 90 days of sends.
+     Results power adaptive nextSendAt scheduling toward high-reply hours. */
+  const orgs = await db.select({ id: schema.organizations.id }).from(schema.organizations);
+  let updated = 0;
+  const windowStart = new Date(Date.now() - 90 * 86400 * 1000);
+  for (const org of orgs) {
+    const rows = await db.execute(sql`
+      SELECT
+        l.niche,
+        extract(hour FROM cr.first_sent_at)::int AS utc_hour,
+        count(*)::int AS n_sent,
+        count(cr.replied_at)::int AS n_replied
+      FROM campaign_recipients cr
+      JOIN leads l ON l.id = cr.lead_id
+      WHERE l.org_id = ${org.id}
+        AND cr.first_sent_at IS NOT NULL
+        AND cr.first_sent_at >= ${windowStart.toISOString()}
+      GROUP BY l.niche, utc_hour
+    `);
+    const list = ((rows as { rows?: unknown[] }).rows ?? (rows as unknown[])) as Array<{
+      niche: string; utc_hour: number; n_sent: number; n_replied: number;
+    }>;
+    for (const row of list) {
+      const replyRate = row.n_sent > 0 ? row.n_replied / row.n_sent : 0;
+      await db.insert(schema.sendTimeHistograms).values({
+        orgId: org.id,
+        niche: row.niche,
+        utcHour: row.utc_hour,
+        nSent: row.n_sent,
+        nReplied: row.n_replied,
+        replyRate,
+        updatedAt: new Date(),
+      }).onConflictDoUpdate({
+        target: [schema.sendTimeHistograms.orgId, schema.sendTimeHistograms.niche, schema.sendTimeHistograms.utcHour],
+        set: { nSent: row.n_sent, nReplied: row.n_replied, replyRate, updatedAt: new Date() },
+      });
+      updated++;
+    }
+  }
+  return { updated };
+}
+
+async function tickReputationTrend(db: Database, log: FastifyBaseLogger): Promise<unknown> {
+  /* For each active mailbox, compare average reputation over last 3 days vs
+     prior 4 days. Auto-pause mailboxes trending steeply downward (>10 pts). */
+  const mailboxes = await db.select({
+    id: schema.senderMailboxes.id,
+    orgId: schema.senderMailboxes.orgId,
+    fromEmail: schema.senderMailboxes.fromEmail,
+    state: schema.senderMailboxes.state,
+  }).from(schema.senderMailboxes)
+    .where(sql`${schema.senderMailboxes.state} IN ('warming','active')`);
+
+  let autoPaused = 0;
+  for (const mx of mailboxes) {
+    const recent = await db.select({
+      date: schema.senderReputationDaily.date,
+      rep: schema.senderReputationDaily.reputationScore,
+    }).from(schema.senderReputationDaily)
+      .where(eq(schema.senderReputationDaily.mailboxId, mx.id))
+      .orderBy(sql`${schema.senderReputationDaily.date} DESC`)
+      .limit(7);
+    if (recent.length < 5) continue;
+    const last3 = recent.slice(0, 3).map(r => r.rep);
+    const prev4 = recent.slice(3, 7).map(r => r.rep);
+    const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    const trend = avg(last3) - avg(prev4);
+    if (trend <= -10) {
+      await db.update(schema.senderMailboxes).set({
+        state: 'paused',
+        pauseReason: `reputation_trend: -${Math.abs(Math.round(trend))} pts over 7d`,
+      }).where(eq(schema.senderMailboxes.id, mx.id));
+      await writeAudit('mailbox_auto_paused_trend', mx.id, { email: mx.fromEmail, trend: Math.round(trend) });
+      log.warn({ mailboxId: mx.id, email: mx.fromEmail, trend }, 'mailbox auto-paused: declining reputation trend');
+      autoPaused++;
+    }
+  }
+  return { evaluated: mailboxes.length, autoPaused };
 }
 
 function capForProvider(provider: string, cfg: ReturnType<typeof getConfig>): number | null {

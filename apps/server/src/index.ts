@@ -19,6 +19,7 @@ import rateLimit from '@fastify/rate-limit';
 import { getConfig, validateConfig } from './config.js';
 import { registerAuth } from './auth.js';
 import { registerRoutes } from './routes.js';
+import { initObservability, startProcessMetrics } from './observability.js';
 import { getDb } from '@keres/db';
 
 async function main() {
@@ -88,6 +89,12 @@ async function main() {
     return payload;
   });
 
+  /* Observability: Sentry + OTel + process metrics. Hooks registered before
+     routes so every request gets a span. */
+  await initObservability(app);
+  const procMetrics = startProcessMetrics();
+  app.addHook('onClose', async () => procMetrics.stop());
+
   registerAuth(app);
   registerRoutes(app);
 
@@ -148,6 +155,12 @@ async function main() {
       route.config = { ...(route.config ?? {}), rateLimit: { max: 12, timeWindow: '1 minute' } };
     }
   });
+
+  /* Queue: pg-boss when QUEUE_TIER=pg-boss, otherwise the in-process DB
+     poller. Initialized before the scheduler since some ticks enqueue. */
+  const { initQueue } = await import('./services/queue.js');
+  const queueAdapter = await initQueue(getDb(), app.log);
+  app.addHook('onClose', async () => queueAdapter.shutdown());
 
   /* In-process scheduler — drives discovery / sending / DNS / warmup ramp /
      budget alerts. Disabled in SAMPLE_MODE so dev runs are click-driven.

@@ -137,7 +137,7 @@ export const leads = pgTable('leads', {
   dedupName: text('dedup_name').generatedAlwaysAs(sql`regexp_replace(lower(coalesce(name,'')), '[^a-z0-9]', '', 'g')`),
 }, t => ({
   statusCheck: check('lead_status_check',
-    sql`${t.status} IN ('new','uncontacted','contacted','replied','interested','booked','bounced','unsubscribed','dnc')`),
+    sql`${t.status} IN ('new','uncontacted','contacted','replied','interested','booked','won','bounced','unsubscribed','dnc')`),
   uniqOrgEmail: uniqueIndex('leads_org_email')
     .on(t.orgId, t.dedupEmail)
     .where(sql`${t.dedupEmail} IS NOT NULL AND ${t.deletedAt} IS NULL`),
@@ -277,10 +277,13 @@ export const campaignRecipients = pgTable('campaign_recipients', {
   variantSeed: bigint('variant_seed', { mode: 'bigint' }),
   slotKey: text('slot_key'),
   providerMessageId: text('provider_message_id'),
+  /** Which mailbox sent this — populated by the rotation pool when the send completes. */
+  senderMailboxId: uuid('sender_mailbox_id'),
   firstSentAt: timestamp('first_sent_at', { withTimezone: true }),
   bouncedAt: timestamp('bounced_at', { withTimezone: true }),
   repliedAt: timestamp('replied_at', { withTimezone: true }),
   skipReason: text('skip_reason'),
+  retryCount: integer('retry_count').notNull().default(0),
 }, t => ({
   uniqCampaignLead: uniqueIndex('cr_campaign_lead').on(t.campaignId, t.leadId),
   idxNextSend: index('cr_next_send').on(t.orgId, t.nextSendAt).where(sql`${t.state} = 'queued'`),
@@ -502,6 +505,397 @@ export const seedlistTests = pgTable('seedlist_tests', {
 }, t => ({
   observedCheck: check('seed_obs_check', sql`${t.observed} IS NULL OR ${t.observed} IN ('primary','promotions','spam','missing')`),
   idxDomain: index('seedlist_domain').on(t.senderDomainId, t.sentAt),
+}));
+
+/* ═════════════════════════════════════════════════════════════════════════
+   v3.3 ADDITIONS — closed-loop scoring, per-mailbox warmup/rotation,
+   website intel, branching replies, seasonal/saturation scoring, queue
+   metrics, and offline AI runs.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Per-mailbox sender (the actual From: address). A `sender_domain` can host
+ * many mailboxes (info@, hello@, founder@) and the rotator picks one per send.
+ * Reputation tracking, warmup curve, and throttling live at this granularity.
+ */
+export const senderMailboxes = pgTable('sender_mailboxes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  senderDomainId: uuid('sender_domain_id').notNull().references(() => senderDomains.id, { onDelete: 'cascade' }),
+  fromEmail: citext('from_email').notNull(),
+  fromName: text('from_name').notNull(),
+  replyTo: citext('reply_to'),
+  /** Lifecycle: provisioning → warming → active → paused (auto or manual) → retired. */
+  state: text('state').notNull().default('provisioning'),
+  /** Reputation score 0..100; blended bounce/complaint/seedlist/age. */
+  reputationScore: integer('reputation_score').notNull().default(50),
+  /** Day index inside the warmup plan (0 = pre-warmup). */
+  warmupDay: integer('warmup_day').notNull().default(0),
+  /** Today's send count + UTC date string (used for daily rollover). */
+  sendsToday: integer('sends_today').notNull().default(0),
+  sendsTodayDate: text('sends_today_date'),
+  /** Hourly token bucket: how many sends remain this hour. Refilled by scheduler. */
+  hourlyTokens: integer('hourly_tokens').notNull().default(0),
+  hourlyTokensRefilledAt: timestamp('hourly_tokens_refilled_at', { withTimezone: true }),
+  /** Cooldown until: rotator will skip until after this timestamp. */
+  cooldownUntil: timestamp('cooldown_until', { withTimezone: true }),
+  /** Last time the rotator selected this mailbox — used for least-recently-used policy. */
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  /** Pause cause; null when active/warming. */
+  pauseReason: text('pause_reason'),
+  /** Per-mailbox warmup plan reference; null = inherits domain default. */
+  warmupPlanId: uuid('warmup_plan_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  stateCheck: check('sm_state_check', sql`${t.state} IN ('provisioning','warming','active','paused','retired')`),
+  uniqOrgEmail: uniqueIndex('sender_mailboxes_org_email').on(t.orgId, t.fromEmail),
+  idxOrgDomainState: index('sender_mailboxes_domain_state').on(t.senderDomainId, t.state),
+}));
+
+/**
+ * Daily reputation rollup per mailbox. One row per (mailbox, date). The
+ * warmup engine reads the last N days to decide ramp/pause.
+ */
+export const senderReputationDaily = pgTable('sender_reputation_daily', {
+  mailboxId: uuid('mailbox_id').notNull().references(() => senderMailboxes.id, { onDelete: 'cascade' }),
+  date: text('date').notNull(),                             // YYYY-MM-DD (UTC)
+  sent: integer('sent').notNull().default(0),
+  delivered: integer('delivered').notNull().default(0),
+  bounced: integer('bounced').notNull().default(0),
+  complained: integer('complained').notNull().default(0),
+  replied: integer('replied').notNull().default(0),
+  unsubscribed: integer('unsubscribed').notNull().default(0),
+  seedlistInbox: integer('seedlist_inbox').notNull().default(0),
+  seedlistSpam: integer('seedlist_spam').notNull().default(0),
+  /** End-of-day reputation snapshot for this mailbox. */
+  reputationScore: integer('reputation_score').notNull().default(50),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  pk: primaryKey({ columns: [t.mailboxId, t.date] }),
+  idxDate: index('srd_date').on(t.date),
+}));
+
+/**
+ * Warmup plan: describes the daily-cap ramp curve. Multiple plans can exist
+ * (e.g. `conservative-28d`, `aggressive-14d`). Mailboxes reference one.
+ */
+export const warmupPlans = pgTable('warmup_plans', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  /** Ordered array of daily caps; index = warmupDay. Last value = steady state. */
+  dailyCaps: integer('daily_caps').array().notNull(),
+  /** Bounce % above which the mailbox auto-pauses during warmup. */
+  pauseBouncePct: doublePrecision('pause_bounce_pct').notNull().default(4),
+  /** Complaint % above which it auto-pauses. */
+  pauseComplaintPct: doublePrecision('pause_complaint_pct').notNull().default(0.1),
+  /** Minimum reputation score to proceed to the next day. */
+  minReputationToAdvance: integer('min_reputation_to_advance').notNull().default(40),
+  isDefault: boolean('is_default').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  uniqOrgName: uniqueIndex('warmup_plans_org_name').on(t.orgId, t.name),
+}));
+
+/**
+ * Market saturation tracker. Rolling counts per (niche, postalCode, windowEndDate).
+ * The aggregator (daily tick) refreshes this from email_events.
+ */
+export const marketSaturation = pgTable('market_saturation', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  niche: text('niche').notNull(),
+  city: text('city'),
+  state: text('state'),
+  postalCode: text('postal_code'),
+  /** End of the rolling window (UTC date). */
+  windowEndDate: text('window_end_date').notNull(),
+  rollingDays: integer('rolling_days').notNull(),
+  /** Distinct leads in this geo+niche we've sent to in the window. */
+  sentLeads: integer('sent_leads').notNull().default(0),
+  /** Total eligible leads in this geo+niche regardless of contact state. */
+  eligibleLeads: integer('eligible_leads').notNull().default(0),
+  /** sentLeads / eligibleLeads * 100, decayed via e^(-t/tau). */
+  saturationPct: doublePrecision('saturation_pct').notNull().default(0),
+  computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  uniqGeoWindow: uniqueIndex('ms_geo_window').on(t.orgId, t.niche, t.postalCode, t.windowEndDate, t.rollingDays),
+  idxNicheGeo: index('ms_niche_geo').on(t.orgId, t.niche, t.city, t.state),
+}));
+
+/**
+ * Signal-outcome aggregation: closed-loop scoring's source of truth. One row
+ * per (signal, value, orgId). The aggregator walks email_events ⨝ inboundMessages
+ * and counts how often each signal value led to a reply or qualified reply.
+ */
+export const signalOutcomes = pgTable('signal_outcomes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  signalKey: text('signal_key').notNull(),
+  signalValue: text('signal_value').notNull(),              // stringified value bucket (true/false/low/high/...)
+  windowDays: integer('window_days').notNull(),             // rolling window
+  windowEndDate: text('window_end_date').notNull(),
+  nObservations: integer('n_observations').notNull().default(0),
+  nSent: integer('n_sent').notNull().default(0),
+  nReplied: integer('n_replied').notNull().default(0),
+  nQualified: integer('n_qualified').notNull().default(0),
+  nBounced: integer('n_bounced').notNull().default(0),
+  nComplained: integer('n_complained').notNull().default(0),
+  nUnsubscribed: integer('n_unsubscribed').notNull().default(0),
+  /** Lift (P(reply|signal=v) / P(reply|signal!=v)) for this value. NaN -> stored as null. */
+  liftReply: doublePrecision('lift_reply'),
+  liftQualified: doublePrecision('lift_qualified'),
+  /** Revenue-weighted signal quality — from won deals associated with this signal bucket. */
+  nWon: integer('n_won').notNull().default(0),
+  totalRevenueUsd: doublePrecision('total_revenue_usd').notNull().default(0),
+  computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  uniqSignalWindow: uniqueIndex('so_signal_window').on(t.orgId, t.signalKey, t.signalValue, t.windowDays, t.windowEndDate),
+}));
+
+/**
+ * Scoring proposal — a candidate weight change generated by the closed-loop
+ * proposer. Pending → applied (becomes a new scoringVersion) or rejected.
+ */
+export const scoringProposals = pgTable('scoring_proposals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  baseVersionId: integer('base_version_id').notNull(),
+  /** Map signalKey -> { weightKey, deltaPoints }. */
+  deltas: jsonb('deltas').notNull(),
+  /** Evidence: snapshot of signal_outcomes rows that motivated the proposal. */
+  evidence: jsonb('evidence').notNull(),
+  status: text('status').notNull().default('pending'),       // pending|applied|rejected|superseded
+  /** When applied, the resulting scoring_versions id. */
+  appliedVersionId: integer('applied_version_id'),
+  notes: text('notes'),
+  proposedAt: timestamp('proposed_at', { withTimezone: true }).notNull().defaultNow(),
+  appliedAt: timestamp('applied_at', { withTimezone: true }),
+}, t => ({
+  statusCheck: check('sp_status_check', sql`${t.status} IN ('pending','applied','rejected','superseded')`),
+  idxOrgStatus: index('sp_org_status').on(t.orgId, t.status),
+}));
+
+/**
+ * Website intelligence — deterministic facts pulled from a lead's website.
+ * One row per lead. Refreshed on demand or by scheduler.
+ */
+export const websiteIntel = pgTable('website_intel', {
+  leadId: uuid('lead_id').primaryKey().references(() => leads.id, { onDelete: 'cascade' }),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  homeUrl: text('home_url'),
+  finalUrl: text('final_url'),
+  /** HTTP status of the home page on the last probe. */
+  httpStatus: integer('http_status'),
+  /** Detected CMS / site builder. */
+  techStack: text('tech_stack').array().notNull().default(sql`ARRAY[]::text[]`),
+  /** Booking vendor (calendly|housecallpro|servicetitan|squarespace|acuity|other|null). */
+  bookingVendor: text('booking_vendor'),
+  /** Email addresses scraped from contact/about/footer. */
+  emails: text('emails').array().notNull().default(sql`ARRAY[]::text[]`),
+  /** Phone numbers scraped. */
+  phones: text('phones').array().notNull().default(sql`ARRAY[]::text[]`),
+  /** Social URLs (LinkedIn, Facebook, Instagram, Yelp profile, Google profile). */
+  social: jsonb('social').notNull().default(sql`'{}'::jsonb`),
+  /** Service list discovered (e.g. ["septic-pumping","drain-cleaning"]). */
+  services: text('services').array().notNull().default(sql`ARRAY[]::text[]`),
+  /** Discovered business hours as a free-form string ("Mon-Fri 8-5"). */
+  hoursText: text('hours_text'),
+  /** Address snippet found on the site (NOT geocoded). */
+  addressText: text('address_text'),
+  /** Years-in-business heuristic ("Since 1997" → 1997). */
+  yearFounded: integer('year_founded'),
+  /** Detected language. */
+  language: text('language'),
+  /** Free-form evidence (selectors hit, paths probed, etc.). */
+  evidence: jsonb('evidence').notNull().default(sql`'{}'::jsonb`),
+  fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  idxOrgBooking: index('wi_org_booking').on(t.orgId, t.bookingVendor),
+}));
+
+/**
+ * Reply-branch state machine progress per (campaign, lead). One row per
+ * conversation thread.
+ */
+export const replyBranchStates = pgTable('reply_branch_states', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  campaignId: uuid('campaign_id').references(() => campaigns.id, { onDelete: 'cascade' }),
+  leadId: uuid('lead_id').notNull().references(() => leads.id, { onDelete: 'cascade' }),
+  recipientId: uuid('recipient_id').references(() => campaignRecipients.id, { onDelete: 'cascade' }),
+  /** FSM node id (awaiting_reply|engaged|asked_for_info|scheduling|won|lost|dormant). */
+  node: text('node').notNull().default('awaiting_reply'),
+  /** Last classifier output that drove a transition. */
+  lastIntent: text('last_intent'),
+  /** Number of follow-ups already sent on this thread. */
+  followUpsSent: integer('follow_ups_sent').notNull().default(0),
+  /** When to fire the next scheduled action (follow-up send, revisit, etc.). */
+  nextActionAt: timestamp('next_action_at', { withTimezone: true }),
+  /** What action to take at nextActionAt (e.g. "send_template:septic-followup-1"). */
+  nextActionKind: text('next_action_kind'),
+  nextActionPayload: jsonb('next_action_payload'),
+  /** Trail: chronological list of transitions for audit/debug. */
+  trail: jsonb('trail').notNull().default(sql`'[]'::jsonb`),
+  /** Won-outcome tracking — populated when operator marks lead as won. */
+  wonAt: timestamp('won_at', { withTimezone: true }),
+  wonOutcomeType: text('won_outcome_type'),        // booked|call_scheduled|replied_yes|manual
+  wonRevenueUsd: doublePrecision('won_revenue_usd'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  uniqCampaignLead: uniqueIndex('rbs_campaign_lead').on(t.campaignId, t.leadId),
+  idxNextAction: index('rbs_next_action').on(t.nextActionAt).where(sql`${t.nextActionAt} IS NOT NULL`),
+  nodeCheck: check('rbs_node_check',
+    sql`${t.node} IN ('awaiting_reply','engaged','asked_for_info','scheduling','won','lost','dormant','suppressed')`),
+  wonOutcomeCheck: check('rbs_won_outcome_check',
+    sql`${t.wonOutcomeType} IS NULL OR ${t.wonOutcomeType} IN ('booked','call_scheduled','replied_yes','manual')`),
+}));
+
+/**
+ * Niche seasonality config. Per niche, monthly multipliers + optional
+ * weather-event amplifier.
+ */
+export const nicheSeasons = pgTable('niche_seasons', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  niche: text('niche').notNull(),
+  /** 12-element array of multipliers (1.0 = neutral; 1.2 = +20%; 0.8 = -20%). Index 0 = January. */
+  monthlyMultipliers: doublePrecision('monthly_multipliers').array().notNull(),
+  /** Multiplier applied when a recent qualifying storm event hits the lead's postal code. */
+  stormBoostMultiplier: doublePrecision('storm_boost_multiplier').notNull().default(1.0),
+  /** Storm event types that trigger the boost (NOAA event_type strings). */
+  stormEventTypes: text('storm_event_types').array().notNull().default(sql`ARRAY[]::text[]`),
+  /** How recent the storm must be (days). */
+  stormBoostWindowDays: integer('storm_boost_window_days').notNull().default(30),
+  /** When `false`, scoring ignores this row. */
+  isActive: boolean('is_active').notNull().default(true),
+  notes: text('notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  uniqOrgNiche: uniqueIndex('ns_org_niche').on(t.orgId, t.niche),
+  monthsLengthCheck: check('ns_months_len', sql`array_length(${t.monthlyMultipliers}, 1) = 12`),
+}));
+
+/**
+ * Per-postal-code weather event overlay. Refreshed from NOAA. The scoring path
+ * joins this to `noaa_storm_zones` for the seasonal scoring factor.
+ */
+export const nicheWeatherOverlays = pgTable('niche_weather_overlays', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  postalCode: text('postal_code').notNull(),
+  eventType: text('event_type').notNull(),
+  /** Cumulative event score in the rolling window (per the niche-seasons config). */
+  intensity: doublePrecision('intensity').notNull().default(0),
+  lastEventAt: timestamp('last_event_at', { withTimezone: true }),
+  refreshedAt: timestamp('refreshed_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  uniqPostalEvent: uniqueIndex('nwo_postal_event').on(t.postalCode, t.eventType),
+}));
+
+/**
+ * Snapshots of queue depth / lag / worker counts. Sampled by the scheduler so
+ * the Observability page can render a queue health timeline.
+ */
+export const queueMetricsSnapshots = pgTable('queue_metrics_snapshots', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tier: text('tier').notNull(),                              // 'db' | 'pg-boss'
+  /** Counts by queue name and status. */
+  counts: jsonb('counts').notNull(),
+  /** Oldest queued job age in ms (across all queues). */
+  oldestQueuedMs: integer('oldest_queued_ms'),
+  /** Sampled at. */
+  sampledAt: timestamp('sampled_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  idxSampled: index('qms_sampled').on(t.sampledAt),
+}));
+
+/**
+ * Offline AI runs — every call into the pluggable AI adapter is recorded
+ * here. Per-lead invocations are forbidden by code, but we still keep an
+ * audit trail of every batch use (template-generation, reply-analysis,
+ * weight-suggestion, intel-summarization).
+ */
+export const aiRuns = pgTable('ai_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  /** Adapter kind: noop|ollama|... */
+  adapter: text('adapter').notNull(),
+  /** Operation name: generate_template|analyze_replies|suggest_weights|summarize_intel */
+  operation: text('operation').notNull(),
+  /** SHA-256 of the redacted input payload (for dedupe + caching). */
+  inputHash: text('input_hash').notNull(),
+  /** Token counts / latency (provider-dependent). */
+  promptTokens: integer('prompt_tokens'),
+  completionTokens: integer('completion_tokens'),
+  latencyMs: integer('latency_ms'),
+  /** Result blob — for templates this is the new copy; for analyses it's a structured summary. */
+  result: jsonb('result'),
+  status: text('status').notNull().default('ok'),            // ok|error|rejected
+  error: text('error'),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  statusCheck: check('ai_runs_status_check', sql`${t.status} IN ('ok','error','rejected')`),
+  opCheck: check('ai_runs_op_check',
+    sql`${t.operation} IN ('generate_template','analyze_replies','suggest_weights','summarize_intel')`),
+  idxOrgOccurred: index('ai_runs_org_occurred').on(t.orgId, t.occurredAt),
+}));
+
+/**
+ * Dead letter queue — permanently-failed recipients after max retries are
+ * archived here. Operators can replay individual items via the API.
+ */
+export const deadLetters = pgTable('dead_letters', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  campaignId: uuid('campaign_id').references(() => campaigns.id, { onDelete: 'cascade' }),
+  leadId: uuid('lead_id').references(() => leads.id, { onDelete: 'set null' }),
+  recipientId: uuid('recipient_id').references(() => campaignRecipients.id, { onDelete: 'set null' }),
+  failReason: text('fail_reason').notNull(),
+  lastError: text('last_error'),
+  archivedAt: timestamp('archived_at', { withTimezone: true }).notNull().defaultNow(),
+  replayedAt: timestamp('replayed_at', { withTimezone: true }),
+  replayCount: integer('replay_count').notNull().default(0),
+}, t => ({
+  idxOrgArchived: index('dl_org_archived').on(t.orgId, t.archivedAt),
+}));
+
+/**
+ * Per-niche per-UTC-hour send-time histograms. The scheduler refreshes these
+ * from campaign_recipients to find which UTC hours yield the best reply rate.
+ * sendBatch uses them to shift nextSendAt toward high-reply hours.
+ */
+export const sendTimeHistograms = pgTable('send_time_histograms', {
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  niche: text('niche').notNull(),
+  utcHour: integer('utc_hour').notNull(),
+  nSent: integer('n_sent').notNull().default(0),
+  nReplied: integer('n_replied').notNull().default(0),
+  replyRate: doublePrecision('reply_rate').notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  pk: primaryKey({ columns: [t.orgId, t.niche, t.utcHour] }),
+  hourCheck: check('sth_hour_check', sql`${t.utcHour} >= 0 AND ${t.utcHour} <= 23`),
+}));
+
+/**
+ * Typed domain event log — append-only event sourcing layer. Each FSM
+ * transition, campaign state change, scoring change, and revenue event is
+ * written here for full auditability and future replay.
+ */
+export const domainEvents = pgTable('domain_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  eventType: text('event_type').notNull(),
+  aggregateType: text('aggregate_type').notNull(), // campaign|lead|mailbox|scoring|reply_branch
+  aggregateId: text('aggregate_id').notNull(),
+  version: integer('version').notNull().default(1),
+  payload: jsonb('payload').notNull().default(sql`'{}'::jsonb`),
+  correlationId: text('correlation_id'),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  idxAgg: index('de_agg').on(t.orgId, t.aggregateType, t.aggregateId, t.occurredAt),
+  idxCorr: index('de_corr').on(t.correlationId).where(sql`${t.correlationId} IS NOT NULL`),
 }));
 
 /* ───── Audit log (campaign launches, suppression, overrides, scoring changes) ───── */
