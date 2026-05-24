@@ -105,6 +105,11 @@ export function registerAuth(app: FastifyInstance) {
     }
     const cookie = (req.cookies as Record<string, string | undefined>)?.[cfg.authCookieName];
     if (cookie && verify(cookie, cfg.authCookieSecret)) return done();
+
+    /* Public read-only: anyone may GET/HEAD without a token; mutations still
+       require a valid session so random visitors can't change data. */
+    if (cfg.publicReadOnly && (req.method === 'GET' || req.method === 'HEAD')) return done();
+
     reply.code(401).send({ ok: false, error: 'unauthorized' });
   });
 }

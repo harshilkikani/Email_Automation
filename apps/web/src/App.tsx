@@ -88,14 +88,30 @@ export default function App() {
     </div>
   ) : null;
 
+  if (authed === null) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Inter, sans-serif', color: '#888', fontSize: 15 }}>
+        Loading…
+      </div>
+    );
+  }
   if (authed === false) {
     return (
       <ToastProvider>
-        <Login onAuth={() => setAuthed(true)} />
+        {healthy === false
+          ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Inter, sans-serif', flexDirection: 'column', gap: 12, color: '#888', fontSize: 14 }}>
+              <div style={{ fontSize: 28 }}>⚡</div>
+              <div style={{ fontWeight: 600, color: '#333', fontSize: 16 }}>Server offline</div>
+              <div style={{ maxWidth: 380, textAlign: 'center', lineHeight: 1.6 }}>Cannot reach the Keres AI API. The server may be starting up — try refreshing in a few seconds.</div>
+              <button style={{ marginTop: 8, padding: '8px 20px', cursor: 'pointer', borderRadius: 6, border: '1px solid #ddd', background: '#fff' }} onClick={() => window.location.reload()}>Retry</button>
+            </div>
+          )
+          : <Login onAuth={() => setAuthed(true)} />
+        }
       </ToastProvider>
     );
   }
-  if (authed === null) return null;
 
   return (
     <ToastProvider>

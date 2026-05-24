@@ -54,13 +54,16 @@ async function main() {
     disableRequestLogging: cfg.nodeEnv === 'production',
   });
 
-  /* CORS allowlist — explicit CORS_ORIGIN (comma-separated) wins; falls back
-     to PUBLIC_BASE_URL + the local dev port in production; wide-open in dev. */
-  const corsOrigins = cfg.nodeEnv === 'production'
-    ? (cfg.corsOrigin.length > 0
+  /* CORS: in PUBLIC_READ_ONLY mode the dashboard is a public shareable link
+     (GitHub Pages, Codespaces, etc.) so any origin may read it — mutations
+     still require a valid token. In private mode we limit origins to the
+     explicit CORS_ORIGIN list, falling back to PUBLIC_BASE_URL. */
+  const corsOrigins =
+    cfg.nodeEnv !== 'production' || cfg.publicReadOnly
+      ? true
+      : cfg.corsOrigin.length > 0
         ? cfg.corsOrigin
-        : [cfg.publicBaseUrl, `http://localhost:${cfg.webPort}`])
-    : true;
+        : [cfg.publicBaseUrl, `http://localhost:${cfg.webPort}`];
   await app.register(cors, { origin: corsOrigins as any, credentials: true });
 
   await app.register(cookie, { secret: cfg.authCookieSecret, parseOptions: { sameSite: 'lax', httpOnly: true, secure: cfg.nodeEnv === 'production' } });
@@ -84,9 +87,22 @@ async function main() {
     if (cfg.nodeEnv === 'production') {
       reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     }
-    /* CSP for HTML responses (unsubscribe landing page).
-       API responses get a safe default that still blocks framing. */
-    reply.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'");
+    /* CSP must differ by content-type. HTML (SPA + unsubscribe page) needs to
+       load same-origin scripts, styles, and Google Fonts. Applying
+       `default-src 'none'` to HTML was silently blocking the React bundle. */
+    const ct = ((reply.getHeader('content-type') ?? '') as string).toLowerCase();
+    if (ct.startsWith('text/html')) {
+      reply.header('Content-Security-Policy',
+        "default-src 'self'; " +
+        "script-src 'self'; " +
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+        "font-src 'self' https://fonts.gstatic.com; " +
+        "connect-src 'self'; " +
+        "img-src 'self' data:; " +
+        "frame-ancestors 'none'");
+    } else {
+      reply.header('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+    }
     return payload;
   });
 

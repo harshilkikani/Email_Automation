@@ -39,6 +39,8 @@ export interface KeresConfig {
    * other. Falls back to `authCookieSecret` if unset (backwards-compatible).
    */
   unsubscribeSigningSecret: string;
+  /** When true, GET/read requests are public (no token); mutations still require auth. */
+  publicReadOnly: boolean;
   /** Allowed CORS origins in production. Falls back to `publicBaseUrl`. */
   corsOrigin: string[];
 
@@ -184,6 +186,7 @@ export function getConfig(): Readonly<KeresConfig> {
     authCookieName: str('AUTH_COOKIE_NAME', 'keres_session'),
     authCookieSecret: str('AUTH_COOKIE_SECRET', 'change-me-too'),
     unsubscribeSigningSecret: str('UNSUBSCRIBE_SIGNING_SECRET') || str('AUTH_COOKIE_SECRET', 'change-me-too'),
+    publicReadOnly: bool('PUBLIC_READ_ONLY', false),
     corsOrigin: (str('CORS_ORIGIN') || '').split(',').map(s => s.trim()).filter(Boolean),
 
     databaseUrl: str('DATABASE_URL', ''),
