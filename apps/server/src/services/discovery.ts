@@ -17,6 +17,7 @@ import {
 } from '@keres/providers';
 import { getConfig } from '../config.js';
 import { lookupLicense } from './license-importer.js';
+import { verifyEmailAddress, verificationFields } from './email-verify.js';
 
 export interface RunDiscoveryInput {
   orgId: string;
@@ -76,6 +77,9 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
       ? await scraper.probe(cand.website ?? '')
       : { webPresenceLevel: cand.website ? 'basic' : 'none', emails: [], hasOnlineBooking: false, deadDomain: false, evidence: { sample: true } } as { webPresenceLevel: WebPresenceLevel; emails: string[]; hasOnlineBooking: boolean; deadDomain: boolean; evidence: Record<string, unknown> };
     if (probe.emails.length > 0 && !cand.email) cand.email = probe.emails[0] ?? null;
+
+    /* Free-chain email verification (syntax → disposable → role → MX). */
+    const verification = await verifyEmailAddress(cand.email);
 
     /* Prefer DB-backed lookup against `state_licensees` (populated via CSV
        importer per LICENSE-SOURCES.md). Fall back to the sample/stub adapter
@@ -146,6 +150,7 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
       confidence: scored.confidence,
       disqualified: scored.disqualified,
       disqualificationReason: scored.disqualificationReason ?? null,
+      ...(verification ? verificationFields(verification) : {}),
     }).returning({ id: schema.leads.id });
 
     const leadId = inserted2[0]?.id;

@@ -10,15 +10,25 @@ import { request } from 'undici';
 import type { LeadCandidate, Niche } from '@keres/core';
 import type { DiscoveryProvider, DiscoveryQuery, DiscoveryResult } from './types.js';
 
+/**
+ * Niche → Overpass filters. These MUST stay keyed (key=value) lookups.
+ *
+ * A bare `nwr["name"~"…"]` clause forces Overpass to regex-scan every named
+ * object in the whole metro area, which reliably times out on the public
+ * instance — and a timed-out query returns an empty element list, so discovery
+ * silently found zero leads. Keyed lookups hit the tag index and return in
+ * seconds. The trade-off is recall: OSM coverage for trade businesses is thin
+ * (e.g. Septic/Towing are near-zero), so CSV import is the path for volume.
+ */
 const NICHE_TO_OSM: Record<Niche, string> = {
-  Roofer: `nwr["craft"="roofer"]({{area}});\nnwr["shop"="roofing"]({{area}});\nnwr["building"="construction"]["name"~"roof",i]({{area}});`,
-  Septic: `nwr["craft"="septic_tank_cleaner"]({{area}});\nnwr["shop"~"septic",i]({{area}});\nnwr["amenity"~"septic",i]({{area}});\nnwr["name"~"septic",i]({{area}});`,
-  'Water/Mold': `nwr["shop"~"restoration",i]({{area}});\nnwr["name"~"restoration|water damage|mold",i]({{area}});`,
-  HVAC: `nwr["craft"="hvac"]({{area}});\nnwr["name"~"hvac|heating|cooling|air conditioning",i]({{area}});`,
-  Plumber: `nwr["craft"="plumber"]({{area}});\nnwr["name"~"plumbing|plumber",i]({{area}});`,
-  Electrician: `nwr["craft"="electrician"]({{area}});\nnwr["name"~"electric",i]({{area}});`,
-  Towing: `nwr["amenity"="tow_yard"]({{area}});\nnwr["name"~"tow|towing|roadside",i]({{area}});`,
-  'Real Estate': `nwr["office"="estate_agent"]({{area}});\nnwr["name"~"real estate|realty|realtor",i]({{area}});`,
+  Roofer:        `nwr["craft"="roofer"]({{area}});\nnwr["shop"="roofing"]({{area}});`,
+  Septic:        `nwr["craft"="septic_tank_cleaner"]({{area}});`,
+  'Water/Mold':  `nwr["craft"="restoration"]({{area}});\nnwr["shop"="restoration"]({{area}});`,
+  HVAC:          `nwr["craft"="hvac"]({{area}});\nnwr["shop"="hvac"]({{area}});`,
+  Plumber:       `nwr["craft"="plumber"]({{area}});`,
+  Electrician:   `nwr["craft"="electrician"]({{area}});`,
+  Towing:        `nwr["amenity"="tow_yard"]({{area}});\nnwr["shop"="towing"]({{area}});`,
+  'Real Estate': `nwr["office"="estate_agent"]({{area}});\nnwr["shop"="estate_agent"]({{area}});`,
 };
 
 interface OsmElement {
@@ -67,21 +77,31 @@ export class OsmAdapter implements DiscoveryProvider {
         Accept: 'application/json',
       },
       body: `data=${encodeURIComponent(body)}`,
-      bodyTimeout: 30_000,
-      headersTimeout: 30_000,
+      bodyTimeout: 70_000,
+      headersTimeout: 70_000,
     });
     if (res.statusCode >= 400) {
       throw new Error(`Overpass returned ${res.statusCode}`);
     }
     const json: any = await res.body.json();
+    /* A timed-out / errored Overpass query returns HTTP 200 with an empty
+       `elements` array and a `remark` explaining the failure. Surface it as an
+       error so discovery reports the problem instead of silently finding zero. */
+    if (typeof json?.remark === 'string' && /timed out|runtime error|error/i.test(json.remark)) {
+      throw new Error(`Overpass query failed: ${json.remark}`);
+    }
     return (json?.elements ?? []) as OsmElement[];
   }
 }
 
 export function buildOverpass(q: DiscoveryQuery): string {
-  const filters = NICHE_TO_OSM[q.niche] ?? `nwr["name"~"${q.niche}",i]({{area}});`;
-  return `[out:json][timeout:25];
-area["name"~"^${q.city}$",i]["admin_level"~"8|7|6"]->.searchArea;
+  const filters = NICHE_TO_OSM[q.niche] ?? `nwr["office"="company"]({{area}});`;
+  /* Exact area name match keeps the area lookup fast (a case-insensitive regex
+     on area names scans every boundary and can blow the timeout budget on its
+     own). Strip quotes to avoid breaking out of the query string. */
+  const city = q.city.trim().replace(/"/g, '');
+  return `[out:json][timeout:60];
+area["name"="${city}"]["admin_level"~"^(8|7|6)$"]->.searchArea;
 (
 ${filters.replace(/\{\{area\}\}/g, 'area.searchArea')}
 );
@@ -92,10 +112,12 @@ function elementToCandidate(e: OsmElement, q: DiscoveryQuery): LeadCandidate | n
   const tags = e.tags ?? {};
   const name = tags['name'];
   if (!name) return null;
-  const phone = tags['contact:phone'] ?? tags['phone'];
-  if (!phone) return null;
+  const phone = tags['contact:phone'] ?? tags['phone'] ?? null;
   const website = tags['website'] ?? tags['contact:website'] ?? null;
   const email = tags['email'] ?? tags['contact:email'] ?? null;
+  /* Need at least one contact channel. A website is enough — the scraper
+     extracts an email from it downstream — so don't require a phone. */
+  if (!phone && !website && !email) return null;
   const street = [tags['addr:housenumber'], tags['addr:street']].filter(Boolean).join(' ');
   const cityTag = tags['addr:city'] ?? q.city;
   const stateTag = tags['addr:state'] ?? q.state;

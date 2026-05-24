@@ -6,6 +6,7 @@ interface Lead {
   id: string; name: string; email: string | null; phone: string | null;
   city: string | null; state: string | null; niche: string; status: string;
   score: number; discoveredAt: string; tags: string[];
+  emailVerificationStatus: string | null;
 }
 
 interface LeadDetail {
@@ -32,6 +33,27 @@ function scoreFillColor(s: number): string {
   if (s >= 60) return 'var(--info)';
   if (s >= 40) return 'var(--warn)';
   return 'var(--fg-3)';
+}
+function verifyBadge(status: string | null | undefined): { label: string; color: string; title: string } {
+  switch (status) {
+    case 'valid':                 return { label: 'Valid',      color: 'var(--accent)', title: 'Mailbox confirmed' };
+    case 'unverifiable_provider': return { label: 'Provider',   color: 'var(--info)',   title: 'Major provider (Gmail/Outlook) — domain valid, mailbox not probed' };
+    case 'unknown':               return { label: 'MX OK',      color: 'var(--info)',   title: 'Domain has a mail server; mailbox not confirmed (no SMTP probe)' };
+    case 'role':                  return { label: 'Role',       color: 'var(--warn)',   title: 'Role address (info@, sales@…) — domain valid' };
+    case 'catch_all':             return { label: 'Catch-all',  color: 'var(--warn)',   title: 'Domain accepts all addresses — deliverability uncertain' };
+    case 'invalid':               return { label: 'Invalid',    color: 'var(--danger)', title: 'Bad syntax or no mail server — do not send' };
+    case 'disposable':            return { label: 'Disposable', color: 'var(--danger)', title: 'Disposable/throwaway domain — do not send' };
+    case 'skipped':               return { label: 'Skipped',    color: 'var(--fg-3)',   title: 'Verification skipped (sample mode)' };
+    default:                      return { label: 'Unchecked',  color: 'var(--fg-3)',   title: 'Not yet verified' };
+  }
+}
+function VBadge({ status }: { status: string | null | undefined }) {
+  const b = verifyBadge(status);
+  return (
+    <span title={b.title} style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, border: `1px solid ${b.color}`, color: b.color, whiteSpace: 'nowrap' }}>
+      {b.label}
+    </span>
+  );
 }
 
 export default function Leads() {
@@ -73,6 +95,24 @@ export default function Leads() {
     refresh();
   };
 
+  const bulkVerify = async () => {
+    const ids = [...selected];
+    for (const id of ids) await api.post(`/leads/${id}/verify`);
+    setSelected(new Set());
+    t.push('success', `Verified ${ids.length}`);
+    refresh();
+  };
+
+  const [verifying, setVerifying] = useState(false);
+  const verifyPending = async () => {
+    setVerifying(true);
+    const r = await api.post<{ verified: number; skipped: number }>('/leads/verify-pending', { limit: 200 });
+    setVerifying(false);
+    if (r.ok) t.push('success', `Verified ${r.data?.verified ?? 0}${r.data?.skipped ? `, skipped ${r.data.skipped}` : ''}`);
+    else t.push('error', r.error ?? 'Verify failed');
+    refresh();
+  };
+
   return (
     <div className="split">
       <aside className="sidebar">
@@ -100,6 +140,7 @@ export default function Leads() {
         {selected.size > 0 && (
           <div className="bulk-bar">
             <span className="txt">{selected.size} selected</span>
+            <button className="btn btn-sm" onClick={bulkVerify}>Verify</button>
             <button className="btn btn-danger btn-sm" onClick={bulkSuppress}>Suppress</button>
             <button className="btn btn-ghost btn-sm" onClick={() => setSelected(new Set())}>Clear</button>
           </div>
@@ -108,11 +149,14 @@ export default function Leads() {
           <div className="tbl-head">
             <h3>Lead Library</h3>
             <span className="tbl-meta">{filtered.length} leads</span>
+            <button className="btn btn-sm" style={{ marginLeft: 'auto' }} disabled={verifying} onClick={verifyPending}>
+              {verifying ? 'Verifying…' : 'Verify pending'}
+            </button>
           </div>
           <div className="tbl-scroll">
             <table>
               <thead><tr>
-                <th style={{ width: 34 }}></th><th>Business</th><th>Email</th><th>Niche</th><th>Location</th><th>Status</th><th>Score</th><th>Found</th>
+                <th style={{ width: 34 }}></th><th>Business</th><th>Email</th><th>Verified</th><th>Niche</th><th>Location</th><th>Status</th><th>Score</th><th>Found</th>
               </tr></thead>
               <tbody>
                 {filtered.map(r => {
@@ -131,6 +175,7 @@ export default function Leads() {
                         {r.phone && <div className="biz-addr">{r.phone}</div>}
                       </td>
                       <td><span className="email-text">{r.email ?? '—'}</span></td>
+                      <td>{r.email ? <VBadge status={r.emailVerificationStatus} /> : <span className="email-text">—</span>}</td>
                       <td><span className={`tag ${nicheTag(r.niche)}`}><span className="dot"></span>{r.niche}</span></td>
                       <td><span className="loc-text">{r.city ?? '—'}, {r.state ?? ''}</span></td>
                       <td><span className={`pill ${r.status}`}>{r.status}</span></td>
@@ -179,6 +224,19 @@ export default function Leads() {
             <div className="panel">
               <h3 style={{ fontSize: 13, marginBottom: 10 }}>Contact</h3>
               <div className="kv"><span className="k">Email</span><span className="v">{drawer.lead.email ?? '—'}</span></div>
+              <div className="kv">
+                <span className="k">Email status</span>
+                <span className="v" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <VBadge status={drawer.lead.emailVerificationStatus} />
+                  {drawer.lead.email && (
+                    <button className="btn btn-ghost btn-sm" onClick={async () => {
+                      const r = await api.post<{ status?: string }>(`/leads/${drawer.lead.id}/verify`);
+                      if (r.ok) { t.push('success', `Email: ${r.data?.status ?? 'done'}`); openDrawer(drawer.lead.id); refresh(); }
+                      else t.push('error', r.error ?? 'Verify failed');
+                    }}>Verify</button>
+                  )}
+                </span>
+              </div>
               <div className="kv"><span className="k">Phone</span><span className="v">{drawer.lead.phone ?? '—'}</span></div>
               <div className="kv"><span className="k">Website</span><span className="v">{drawer.lead.website ?? '—'}</span></div>
               <div className="kv"><span className="k">Address</span><span className="v">{drawer.lead.address ?? '—'}</span></div>

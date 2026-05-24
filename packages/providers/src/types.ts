@@ -23,7 +23,7 @@ export interface DiscoveryProvider {
 }
 
 export interface VerificationResult {
-  status: 'valid' | 'invalid' | 'catch_all' | 'unverifiable_provider' | 'unknown' | 'role' | 'disposable';
+  status: 'valid' | 'invalid' | 'catch_all' | 'unverifiable_provider' | 'unknown' | 'role' | 'disposable' | 'skipped';
   source: 'syntax' | 'mx' | 'smtp' | 'bouncer' | 'hunter' | 'disposable' | 'role' | 'skipped';
   detail?: string;
   costCents?: number;

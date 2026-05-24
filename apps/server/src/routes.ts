@@ -38,6 +38,7 @@ import {
   applyScoringProposal, rejectScoringProposal,
 } from './services/closed-loop.js';
 import { refreshWebsiteIntelForLead } from './services/website-intel.js';
+import { verifyLead, verifyPendingLeads } from './services/email-verify.js';
 import { emitEvent } from './services/events.js';
 
 /* Get the single-tenant org id from env / db — cached for 60s to avoid per-request DB lookup. */
@@ -330,6 +331,21 @@ export function registerRoutes(app: FastifyInstance) {
     return r;
   });
 
+  app.post('/api/leads/:id/verify', async (req) => {
+    const { id } = req.params as { id: string };
+    const r = await verifyLead(getDb(), id);
+    await writeAudit('email_verify', id, { ok: r.ok, status: r.status ?? null, error: r.error ?? null }, req);
+    return r;
+  });
+
+  app.post('/api/leads/verify-pending', async (req) => {
+    const orgId = await singleOrgId();
+    const body = (req.body ?? {}) as { limit?: number };
+    const r = await verifyPendingLeads(getDb(), orgId, body.limit ?? 100);
+    await writeAudit('email_verify_pending', null, { verified: r.verified, skipped: r.skipped }, req);
+    return r;
+  });
+
   app.patch('/api/leads/:id', async (req) => {
     const db = getDb();
     const { id } = req.params as { id: string };
@@ -465,7 +481,7 @@ export function registerRoutes(app: FastifyInstance) {
     await emitEvent(db, orgId2, 'campaign.launched', 'campaign', id, {
       name: camp.name, kind: camp.kind, recipientCount: camp.recipientCount,
     });
-    const sent = await sendBatch(db, { campaignId: id, maxToSend: cfg.sendBatchSize });
+    const sent = await sendBatch(db, { campaignId: id, maxToSend: cfg.queue.sendBatchSize });
     return { ok: true, gate, sent };
   });
 
