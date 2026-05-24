@@ -5,18 +5,28 @@ import { api } from '../api';
 interface DashboardMetrics {
   totals: { leads: number; freshLast7d: number };
   last24h: { sent: number; delivered: number; bounced: number; complained: number; replied: number; unsubscribed: number };
+  verification?: { deliverable: number; risky: number; undeliverable: number; unchecked: number; withEmail: number };
   providers: { sampleMode: boolean; budgetMode: string };
 }
+
+interface Blocker { key: string; status: string; message: string; howToFix?: string | null }
+interface ReadyState { ok: boolean; blockingCount?: number; blockers?: Blocker[] }
 
 export default function Dashboard() {
   const nav = useNavigate();
   const [m, setM] = useState<DashboardMetrics | null>(null);
+  const [ready, setReady] = useState<ReadyState | null>(null);
   const [jobValue, setJobValue] = useState(800);
   const [closeRate, setCloseRate] = useState(30);
 
   useEffect(() => {
     api.get<DashboardMetrics>('/metrics/dashboard').then(r => { if (r.ok && r.data) setM(r.data); });
+    /* /api/ready returns 503 (ok:false) while launch-gate blockers remain, but
+       the JSON body is still on r.data — read it regardless of the ok flag. */
+    api.get<ReadyState>('/ready').then(r => { if (r.data) setReady(r.data as ReadyState); });
   }, []);
+
+  const blockers = (ready?.blockers ?? []).filter(b => b.status === 'fail');
 
   const sent = m?.last24h.sent ?? 0;
   const replies = Math.round(sent * 0.04);
@@ -77,28 +87,29 @@ export default function Dashboard() {
         <div className="builder-grid">
           <div>
             <div className="panel">
-              <div className="panel-head"><h2>⚡ Next best actions</h2></div>
-              <div className="nba">
-                <div className="nba-ico">①</div>
-                <div className="nba-body">
-                  <div className="nba-title">Confirm SES production access</div>
-                  <div className="nba-desc">Settings → toggle "Production access confirmed" once your AWS ticket is approved.</div>
-                </div>
+              <div className="panel-head">
+                <h2>⚡ Launch checklist</h2>
+                {ready && <span className="tbl-meta">{blockers.length === 0 ? 'all clear' : `${blockers.length} blocking`}</span>}
               </div>
-              <div className="nba">
-                <div className="nba-ico">②</div>
-                <div className="nba-body">
-                  <div className="nba-title">Verify DNS for your outreach subdomain</div>
-                  <div className="nba-desc">Deliverability → Check DNS. Spec-required SPF / DKIM / DMARC alignment.</div>
+              {!ready && <p className="panel-desc">Loading launch-gate status…</p>}
+              {ready && blockers.length === 0 && (
+                <div className="nba">
+                  <div className="nba-ico" style={{ color: 'var(--accent)' }}>✓</div>
+                  <div className="nba-body">
+                    <div className="nba-title">All launch-gate checks pass</div>
+                    <div className="nba-desc">You're clear to enable real sending. Build a campaign to start outreach.</div>
+                  </div>
                 </div>
-              </div>
-              <div className="nba">
-                <div className="nba-ico">③</div>
-                <div className="nba-body">
-                  <div className="nba-title">Run Day-0 eyeball review</div>
-                  <div className="nba-desc">Validation → New experiment. Rate 50 top leads before any sends.</div>
+              )}
+              {blockers.slice(0, 6).map((b, i) => (
+                <div className="nba" key={b.key}>
+                  <div className="nba-ico">{i + 1}</div>
+                  <div className="nba-body">
+                    <div className="nba-title">{b.message}</div>
+                    {b.howToFix && <div className="nba-desc">{b.howToFix}</div>}
+                  </div>
                 </div>
-              </div>
+              ))}
             </div>
           </div>
 
@@ -123,6 +134,22 @@ export default function Dashboard() {
                 <span className="k">Projected revenue</span>
                 <span className="v" style={{ color: 'var(--accent)' }}>${revenue.toLocaleString()}</span>
               </div>
+            </div>
+            <div className="panel">
+              <div className="panel-head">
+                <h2>✉ Email verification</h2>
+                <span className="tbl-meta" style={{ cursor: 'pointer' }} onClick={() => nav('/leads')}>View →</span>
+              </div>
+              {m?.verification && m.verification.withEmail > 0 ? (
+                <>
+                  <div className="kv"><span className="k">Deliverable</span><span className="v" style={{ color: 'var(--accent)' }}>{m.verification.deliverable}</span></div>
+                  <div className="kv"><span className="k">Risky (role / catch-all)</span><span className="v" style={{ color: 'var(--warn)' }}>{m.verification.risky}</span></div>
+                  <div className="kv"><span className="k">Undeliverable</span><span className="v" style={{ color: 'var(--danger)' }}>{m.verification.undeliverable}</span></div>
+                  <div className="kv"><span className="k">Unchecked</span><span className="v">{m.verification.unchecked}</span></div>
+                </>
+              ) : (
+                <p className="panel-desc">No emailable leads yet. Run discovery or import a CSV, then verify from the Leads page.</p>
+              )}
             </div>
             <div className="panel">
               <div className="panel-head"><h2>◷ Runtime mode</h2></div>

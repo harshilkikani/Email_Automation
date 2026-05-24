@@ -3,7 +3,7 @@
  * obvious. Each handler is small and delegates to a service in `./services`.
  */
 import type { FastifyInstance } from 'fastify';
-import { and, eq, desc, sql, isNull, gte, inArray, lt } from 'drizzle-orm';
+import { and, eq, desc, sql, isNull, isNotNull, gte, inArray, lt } from 'drizzle-orm';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { getDb } from '@keres/db';
 import { schema } from '@keres/db';
@@ -793,6 +793,24 @@ ${r.ok
                  gte(schema.emailEvents.occurredAt, new Date(Date.now() - 24 * 3600e3))))
       .groupBy(schema.emailEvents.eventType);
     const map = Object.fromEntries(ev24.map(r => [r.t, Number(r.c)]));
+
+    /* Email-verification breakdown over leads that have an email. */
+    const verRows = await db.select({
+      s: schema.leads.emailVerificationStatus, c: sql<number>`count(*)::int`,
+    })
+      .from(schema.leads)
+      .where(and(eq(schema.leads.orgId, orgId), isNull(schema.leads.deletedAt), isNotNull(schema.leads.email)))
+      .groupBy(schema.leads.emailVerificationStatus);
+    const vc = (statuses: (string | null)[]) =>
+      verRows.filter(r => statuses.includes(r.s)).reduce((a, r) => a + Number(r.c), 0);
+    const verification = {
+      deliverable:   vc(['valid', 'unverifiable_provider', 'unknown']),
+      risky:         vc(['role', 'catch_all']),
+      undeliverable: vc(['invalid', 'disposable']),
+      unchecked:     vc([null, 'skipped']),
+      withEmail:     verRows.reduce((a, r) => a + Number(r.c), 0),
+    };
+
     return {
       ok: true,
       totals: { leads: totalLeads, freshLast7d: fresh },
@@ -801,6 +819,7 @@ ${r.ok
         bounced: map.bounce ?? 0, complained: map.complaint ?? 0,
         replied: map.reply ?? 0, unsubscribed: map.unsubscribe ?? 0,
       },
+      verification,
       providers: {
         sampleMode: cfg.sampleMode,
         budgetMode: cfg.budgetMode,

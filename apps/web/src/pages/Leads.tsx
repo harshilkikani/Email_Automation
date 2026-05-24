@@ -34,26 +34,23 @@ function scoreFillColor(s: number): string {
   if (s >= 40) return 'var(--warn)';
   return 'var(--fg-3)';
 }
-function verifyBadge(status: string | null | undefined): { label: string; color: string; title: string } {
+type VerifyBucket = 'deliverable' | 'risky' | 'undeliverable' | 'unchecked';
+function verifyBadge(status: string | null | undefined): { label: string; cls: string; title: string; bucket: VerifyBucket } {
   switch (status) {
-    case 'valid':                 return { label: 'Valid',      color: 'var(--accent)', title: 'Mailbox confirmed' };
-    case 'unverifiable_provider': return { label: 'Provider',   color: 'var(--info)',   title: 'Major provider (Gmail/Outlook) — domain valid, mailbox not probed' };
-    case 'unknown':               return { label: 'MX OK',      color: 'var(--info)',   title: 'Domain has a mail server; mailbox not confirmed (no SMTP probe)' };
-    case 'role':                  return { label: 'Role',       color: 'var(--warn)',   title: 'Role address (info@, sales@…) — domain valid' };
-    case 'catch_all':             return { label: 'Catch-all',  color: 'var(--warn)',   title: 'Domain accepts all addresses — deliverability uncertain' };
-    case 'invalid':               return { label: 'Invalid',    color: 'var(--danger)', title: 'Bad syntax or no mail server — do not send' };
-    case 'disposable':            return { label: 'Disposable', color: 'var(--danger)', title: 'Disposable/throwaway domain — do not send' };
-    case 'skipped':               return { label: 'Skipped',    color: 'var(--fg-3)',   title: 'Verification skipped (sample mode)' };
-    default:                      return { label: 'Unchecked',  color: 'var(--fg-3)',   title: 'Not yet verified' };
+    case 'valid':                 return { label: 'Valid',      cls: 'ok',    bucket: 'deliverable',   title: 'Mailbox confirmed' };
+    case 'unverifiable_provider': return { label: 'Provider',   cls: 'info',  bucket: 'deliverable',   title: 'Major provider (Gmail/Outlook) — domain valid, mailbox not probed' };
+    case 'unknown':               return { label: 'MX OK',      cls: 'info',  bucket: 'deliverable',   title: 'Domain has a mail server; mailbox not confirmed (no SMTP probe)' };
+    case 'role':                  return { label: 'Role',       cls: 'warn',  bucket: 'risky',         title: 'Role address (info@, sales@…) — domain valid' };
+    case 'catch_all':             return { label: 'Catch-all',  cls: 'warn',  bucket: 'risky',         title: 'Domain accepts all addresses — deliverability uncertain' };
+    case 'invalid':               return { label: 'Invalid',    cls: 'bad',   bucket: 'undeliverable', title: 'Bad syntax or no mail server — do not send' };
+    case 'disposable':            return { label: 'Disposable', cls: 'bad',   bucket: 'undeliverable', title: 'Disposable/throwaway domain — do not send' };
+    case 'skipped':               return { label: 'Skipped',    cls: 'muted', bucket: 'unchecked',     title: 'Verification skipped (sample mode)' };
+    default:                      return { label: 'Unchecked',  cls: 'muted', bucket: 'unchecked',     title: 'Not yet verified' };
   }
 }
 function VBadge({ status }: { status: string | null | undefined }) {
   const b = verifyBadge(status);
-  return (
-    <span title={b.title} style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, border: `1px solid ${b.color}`, color: b.color, whiteSpace: 'nowrap' }}>
-      {b.label}
-    </span>
-  );
+  return <span className={`vbadge ${b.cls}`} title={b.title}>{b.label}</span>;
 }
 
 export default function Leads() {
@@ -61,6 +58,7 @@ export default function Leads() {
   const [rows, setRows] = useState<Lead[]>([]);
   const [status, setStatus] = useState('all');
   const [niche, setNiche] = useState('all');
+  const [emailStatus, setEmailStatus] = useState<'all' | VerifyBucket>('all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [drawer, setDrawer] = useState<LeadDetail | null>(null);
@@ -76,12 +74,16 @@ export default function Leads() {
   useEffect(() => { refresh();   }, [status, niche]);
 
   const filtered = useMemo(() => rows.filter(r => {
+    if (emailStatus !== 'all') {
+      if (!r.email) return false;
+      if (verifyBadge(r.emailVerificationStatus).bucket !== emailStatus) return false;
+    }
     if (!search) return true;
     const s = search.toLowerCase();
     return r.name.toLowerCase().includes(s)
       || (r.email ?? '').toLowerCase().includes(s)
       || (r.city ?? '').toLowerCase().includes(s);
-  }), [rows, search]);
+  }), [rows, search, emailStatus]);
 
   const openDrawer = async (id: string) => {
     const r = await api.get<LeadDetail>(`/leads/${id}`);
@@ -133,6 +135,14 @@ export default function Leads() {
           <button className={'fb' + (niche === 'all' ? ' on' : '')} onClick={() => setNiche('all')}>All</button>
           {NICHE_OPTIONS.map(n => (
             <button key={n} className={'fb' + (niche === n ? ' on' : '')} onClick={() => setNiche(n)}>{n}</button>
+          ))}
+        </div>
+        <div className="sb-section">
+          <div className="sb-label"><span>Email status</span></div>
+          {([['all','All'],['deliverable','Deliverable'],['risky','Risky'],['undeliverable','Undeliverable'],['unchecked','Unchecked']] as const).map(([k, label]) => (
+            <button key={k} className={'fb' + (emailStatus === k ? ' on' : '')} onClick={() => setEmailStatus(k)}>
+              <span className="fb-row">{label}</span>
+            </button>
           ))}
         </div>
       </aside>
