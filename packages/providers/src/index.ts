@@ -13,4 +13,5 @@ export * from './ses.js';
 export * from './ses-events.js';
 export * from './sns-verify.js';
 export * from './mailgun.js';
+export * from './resend.js';
 export * from './inbound.js';

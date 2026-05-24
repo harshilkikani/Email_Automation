@@ -74,6 +74,11 @@ export interface KeresConfig {
     region: 'us' | 'eu';
   };
 
+  resend: {
+    enabled: boolean;
+    apiKey: string;
+  };
+
   postmarkInbound: {
     enabled: boolean;
     token: string;
@@ -226,6 +231,11 @@ export function getConfig(): Readonly<KeresConfig> {
       region: (str('MAILGUN_REGION', 'us') as 'us' | 'eu'),
     },
 
+    resend: {
+      enabled: bool('ENABLE_RESEND', false),
+      apiKey: str('RESEND_API_KEY'),
+    },
+
     postmarkInbound: {
       enabled: bool('ENABLE_POSTMARK_INBOUND', false),
       token: str('POSTMARK_INBOUND_TOKEN'),
@@ -365,6 +375,9 @@ export function validateConfig(cfg: Readonly<KeresConfig>): ValidationIssue[] {
   }
   if (cfg.mailgun.enabled && (!cfg.mailgun.apiKey || !cfg.mailgun.domain)) {
     issues.push({ severity: 'error', code: 'mailgun_missing_creds', message: 'ENABLE_MAILGUN=true but MAILGUN_API_KEY or MAILGUN_DOMAIN is missing.' });
+  }
+  if (cfg.resend.enabled && !cfg.resend.apiKey) {
+    issues.push({ severity: 'error', code: 'resend_missing_key', message: 'ENABLE_RESEND=true but RESEND_API_KEY is missing.' });
   }
   if (cfg.bouncer.enabled && !cfg.bouncer.apiKey) {
     issues.push({ severity: 'error', code: 'bouncer_no_key', message: 'ENABLE_BOUNCER=true but BOUNCER_API_KEY is empty.' });

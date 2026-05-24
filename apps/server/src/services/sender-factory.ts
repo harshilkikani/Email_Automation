@@ -4,7 +4,7 @@
  * ENABLE_SES → SesAdapter; else MockOutbound (sends nothing).
  */
 import type { OutboundProvider } from '@keres/providers';
-import { MailgunAdapter, MockOutbound, SesAdapter } from '@keres/providers';
+import { MailgunAdapter, MockOutbound, ResendAdapter, SesAdapter } from '@keres/providers';
 import { getConfig } from '../config.js';
 
 let provider: OutboundProvider | null = null;
@@ -14,6 +14,8 @@ export function getOutbound(): OutboundProvider {
   const cfg = getConfig();
   if (cfg.sampleMode) {
     provider = new MockOutbound();
+  } else if (cfg.resend.enabled) {
+    provider = new ResendAdapter({ enabled: true, apiKey: cfg.resend.apiKey });
   } else if (cfg.mailgun.enabled) {
     provider = new MailgunAdapter({
       enabled: true,
