@@ -120,7 +120,7 @@ export function registerRoutes(app: FastifyInstance) {
     ok: true,
     sampleMode: cfg.sampleMode,
     mode: cfg.budgetMode,
-    enableSes: cfg.ses.enabled,
+    enableSes: cfg.ses.enabled || cfg.mailgun.enabled,
   }));
 
   /* ────────────── Settings ────────────── */
@@ -1250,7 +1250,7 @@ ${r.ok
         blockers,
         safeToUseForSetup,
         realOutboundEnabled: cfg.ses.enabled && !cfg.sampleMode,
-        enableSes: cfg.ses.enabled,
+        enableSes: cfg.ses.enabled || cfg.mailgun.enabled,
         sampleMode: cfg.sampleMode,
         db: d.db,
         migrations: d.migrations,
@@ -1266,7 +1266,7 @@ ${r.ok
         error: e?.message ?? String(e),
         safeToUseForSetup: false,
         realOutboundEnabled: cfg.ses.enabled && !cfg.sampleMode,
-        enableSes: cfg.ses.enabled,
+        enableSes: cfg.ses.enabled || cfg.mailgun.enabled,
         sampleMode: cfg.sampleMode,
         timestamp,
       };

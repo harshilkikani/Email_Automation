@@ -12,4 +12,5 @@ export * from './bouncer.js';
 export * from './ses.js';
 export * from './ses-events.js';
 export * from './sns-verify.js';
+export * from './mailgun.js';
 export * from './inbound.js';

@@ -1,10 +1,10 @@
 /**
  * Selects the outbound provider once and caches it.
- * - SAMPLE_MODE or ENABLE_SES=false: MockOutbound.
- * - Else: SesAdapter.
+ * Priority: SAMPLE_MODE → MockOutbound; ENABLE_MAILGUN → MailgunAdapter;
+ * ENABLE_SES → SesAdapter; else MockOutbound (sends nothing).
  */
 import type { OutboundProvider } from '@keres/providers';
-import { MockOutbound, SesAdapter } from '@keres/providers';
+import { MailgunAdapter, MockOutbound, SesAdapter } from '@keres/providers';
 import { getConfig } from '../config.js';
 
 let provider: OutboundProvider | null = null;
@@ -12,9 +12,16 @@ let provider: OutboundProvider | null = null;
 export function getOutbound(): OutboundProvider {
   if (provider) return provider;
   const cfg = getConfig();
-  if (cfg.sampleMode || !cfg.ses.enabled) {
+  if (cfg.sampleMode) {
     provider = new MockOutbound();
-  } else {
+  } else if (cfg.mailgun.enabled) {
+    provider = new MailgunAdapter({
+      enabled: true,
+      apiKey: cfg.mailgun.apiKey,
+      domain: cfg.mailgun.domain,
+      region: cfg.mailgun.region,
+    });
+  } else if (cfg.ses.enabled) {
     provider = new SesAdapter({
       enabled: true,
       region: cfg.ses.region,
@@ -22,6 +29,8 @@ export function getOutbound(): OutboundProvider {
       secretAccessKey: cfg.ses.secretAccessKey,
       configurationSet: cfg.ses.configurationSet,
     });
+  } else {
+    provider = new MockOutbound();
   }
   return provider;
 }

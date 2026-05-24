@@ -68,7 +68,8 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
      but `/api/campaigns/:id/resume` can revive a paused campaign without
      re-running the gate — this guard catches that path so MockOutbound never
      "fake-sends" to real recipients. */
-  if (cfg.nodeEnv === 'production' && !cfg.ses.enabled && !cfg.sampleMode) {
+  const outboundEnabled = cfg.ses.enabled || cfg.mailgun.enabled;
+  if (cfg.nodeEnv === 'production' && !outboundEnabled && !cfg.sampleMode) {
     return { sent: 0, skipped: 0, failed: 0 };
   }
   const provider = getOutbound();

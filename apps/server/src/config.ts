@@ -67,6 +67,13 @@ export interface KeresConfig {
     productionAccessConfirmed: boolean;
   };
 
+  mailgun: {
+    enabled: boolean;
+    apiKey: string;
+    domain: string;
+    region: 'us' | 'eu';
+  };
+
   postmarkInbound: {
     enabled: boolean;
     token: string;
@@ -212,6 +219,13 @@ export function getConfig(): Readonly<KeresConfig> {
       productionAccessConfirmed: bool('SES_PRODUCTION_ACCESS_CONFIRMED', false),
     },
 
+    mailgun: {
+      enabled: bool('ENABLE_MAILGUN', false),
+      apiKey: str('MAILGUN_API_KEY'),
+      domain: str('MAILGUN_DOMAIN'),
+      region: (str('MAILGUN_REGION', 'us') as 'us' | 'eu'),
+    },
+
     postmarkInbound: {
       enabled: bool('ENABLE_POSTMARK_INBOUND', false),
       token: str('POSTMARK_INBOUND_TOKEN'),
@@ -348,6 +362,9 @@ export function validateConfig(cfg: Readonly<KeresConfig>): ValidationIssue[] {
   }
   if (cfg.ses.enabled && !cfg.ses.productionAccessConfirmed && cfg.nodeEnv === 'production') {
     issues.push({ severity: 'error', code: 'ses_sandbox_in_prod', message: 'SES_PRODUCTION_ACCESS_CONFIRMED must be true in production.' });
+  }
+  if (cfg.mailgun.enabled && (!cfg.mailgun.apiKey || !cfg.mailgun.domain)) {
+    issues.push({ severity: 'error', code: 'mailgun_missing_creds', message: 'ENABLE_MAILGUN=true but MAILGUN_API_KEY or MAILGUN_DOMAIN is missing.' });
   }
   if (cfg.bouncer.enabled && !cfg.bouncer.apiKey) {
     issues.push({ severity: 'error', code: 'bouncer_no_key', message: 'ENABLE_BOUNCER=true but BOUNCER_API_KEY is empty.' });
