@@ -80,17 +80,28 @@ export async function evaluateLaunchGate(db: Database, opts: LaunchGateOptions):
     'Settings → Sender identity → Physical postal address.',
     'docs/COMPLIANCE.md');
 
-  /* ── SES production access ── */
-  push(checks, 'ses_production_access', 'SES production access confirmed',
-    org?.productionAccessConfirmed ? 'pass' : 'fail',
-    org?.productionAccessConfirmed ? undefined : 'SES sandbox limits sending to 200/day and verified addresses only.',
-    'Open AWS SES → Account dashboard → Request production access. Then toggle Settings → Compliance.');
+  /* ── SES production access (SES-only check) ── */
+  const anyRealOutbound = cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled;
+  if (cfg.ses.enabled) {
+    push(checks, 'ses_production_access', 'SES production access confirmed',
+      org?.productionAccessConfirmed ? 'pass' : 'fail',
+      org?.productionAccessConfirmed ? undefined : 'SES sandbox limits sending to 200/day and verified addresses only.',
+      'Open AWS SES → Account dashboard → Request production access. Then toggle Settings → Compliance.');
+  }
 
   /* ── Outbound provider configured ── */
-  push(checks, 'outbound_configured', 'Outbound provider configured (SES)',
-    cfg.ses.enabled || cfg.sampleMode ? 'pass' : 'fail',
-    cfg.ses.enabled ? undefined : 'ENABLE_SES=false.',
-    'Set ENABLE_SES=true and provide region + credentials in .env.');
+  const outboundLabel = cfg.resend.enabled ? 'Outbound provider configured (Resend)'
+    : cfg.mailgun.enabled ? 'Outbound provider configured (Mailgun)'
+    : 'Outbound provider configured (SES)';
+  const outboundFix = cfg.resend.enabled
+    ? 'Set ENABLE_RESEND=true and RESEND_API_KEY in Fly secrets.'
+    : cfg.mailgun.enabled
+    ? 'Set ENABLE_MAILGUN=true, MAILGUN_API_KEY, and MAILGUN_DOMAIN in Fly secrets.'
+    : 'Set ENABLE_SES=true and provide region + credentials in .env.';
+  push(checks, 'outbound_configured', outboundLabel,
+    anyRealOutbound || cfg.sampleMode ? 'pass' : 'fail',
+    anyRealOutbound ? undefined : 'No outbound provider enabled.',
+    outboundFix);
 
   /* ── Seedlist configured ── */
   push(checks, 'seedlist_configured', 'Seedlist configured',
@@ -116,12 +127,23 @@ export async function evaluateLaunchGate(db: Database, opts: LaunchGateOptions):
     domain ? undefined : 'No sender_domains row. Add one in Deliverability.');
 
   if (domain) {
+    const spfFix = cfg.resend.enabled
+      ? 'Add TXT record: v=spf1 include:amazonses.com ~all (Resend sends via SES infrastructure).'
+      : cfg.mailgun.enabled
+      ? 'Add TXT record: v=spf1 include:mailgun.org ~all on your sending domain.'
+      : 'Add a TXT record on your outreach subdomain with v=spf1 include:amazonses.com -all.';
     push(checks, 'spf_pass', 'SPF aligned to ESP', domain.spfStatus === 'pass' ? 'pass' : 'fail',
       domain.spfStatus === 'pass' ? undefined : 'SPF record missing or wrong include directive.',
-      'Add a TXT record on your outreach subdomain with v=spf1 include:amazonses.com -all.');
-    push(checks, 'dkim_pass', 'DKIM (3 SES selectors)', domain.dkimStatus === 'pass' ? 'pass' : 'fail',
-      domain.dkimStatus === 'pass' ? undefined : 'All three SES Easy DKIM CNAMEs (s1/s2/s3) must resolve.',
-      'In AWS SES → verified identities, copy the 3 DKIM CNAMEs into your DNS.');
+      spfFix);
+    const dkimFix = cfg.resend.enabled
+      ? 'In Resend dashboard → Domains, copy the DKIM CNAME record into your DNS and wait for verification.'
+      : cfg.mailgun.enabled
+      ? 'In Mailgun → Sending → Domains, copy the DKIM TXT record into your DNS.'
+      : 'In AWS SES → verified identities, copy the 3 DKIM CNAMEs into your DNS.';
+    const dkimLabel = cfg.resend.enabled ? 'DKIM (Resend)' : cfg.mailgun.enabled ? 'DKIM (Mailgun)' : 'DKIM (3 SES selectors)';
+    push(checks, 'dkim_pass', dkimLabel, domain.dkimStatus === 'pass' ? 'pass' : 'fail',
+      domain.dkimStatus === 'pass' ? undefined : 'DKIM record missing or not yet verified.',
+      dkimFix);
     push(checks, 'dmarc_pass', 'DMARC record', domain.dmarcStatus === 'pass' ? 'pass' : 'fail',
       domain.dmarcStatus === 'pass' ? undefined : 'DMARC TXT record missing.',
       'Add a TXT record on _dmarc.<root-domain> with v=DMARC1; p=none; rua=mailto:rua@...');
