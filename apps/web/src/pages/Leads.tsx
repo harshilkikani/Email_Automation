@@ -13,6 +13,14 @@ interface LeadDetail {
   ok: boolean;
   lead: Lead & { website: string | null; address: string | null; postalCode: string | null; disqualified: boolean; disqualificationReason: string | null };
   signals: any;
+  intel: WebsiteIntel | null;
+  events?: any[];
+}
+interface WebsiteIntel {
+  finalUrl: string | null; homeUrl: string | null; httpStatus: number | null;
+  bookingVendor: string | null; techStack: string[]; services: string[];
+  emails: string[]; phones: string[]; social: Record<string, string>;
+  yearFounded: number | null; hoursText: string | null; fetchedAt: string;
 }
 
 const STATUS_OPTIONS = ['all','new','uncontacted','contacted','replied','interested','booked','bounced','unsubscribed','dnc'];
@@ -250,6 +258,33 @@ export default function Leads() {
               <div className="kv"><span className="k">Phone</span><span className="v">{drawer.lead.phone ?? '—'}</span></div>
               <div className="kv"><span className="k">Website</span><span className="v">{drawer.lead.website ?? '—'}</span></div>
               <div className="kv"><span className="k">Address</span><span className="v">{drawer.lead.address ?? '—'}</span></div>
+            </div>
+            <div className="panel">
+              <div className="panel-head" style={{ marginBottom: 8, paddingBottom: 8 }}>
+                <h3 style={{ fontSize: 13 }}>Website intel</h3>
+                {drawer.lead.website && (
+                  <button className="btn btn-ghost btn-sm" onClick={async () => {
+                    const r = await api.post<{ ok: boolean; reason?: string }>(`/leads/${drawer.lead.id}/refresh-intel`);
+                    if (r.ok) { t.push('success', 'Intel refreshed'); openDrawer(drawer.lead.id); }
+                    else t.push('error', r.error ?? (r.data as any)?.reason ?? 'Refresh failed');
+                  }}>Refresh</button>
+                )}
+              </div>
+              {drawer.intel ? (
+                <>
+                  {drawer.intel.bookingVendor && <div className="kv"><span className="k">Booking</span><span className="v">{drawer.intel.bookingVendor}</span></div>}
+                  {drawer.intel.techStack?.length > 0 && <div className="kv"><span className="k">Tech</span><span className="v">{drawer.intel.techStack.join(', ')}</span></div>}
+                  {drawer.intel.services?.length > 0 && <div className="kv"><span className="k">Services</span><span className="v">{drawer.intel.services.join(', ')}</span></div>}
+                  {drawer.intel.emails?.length > 0 && <div className="kv"><span className="k">Emails found</span><span className="v">{drawer.intel.emails.join(', ')}</span></div>}
+                  {drawer.intel.phones?.length > 0 && <div className="kv"><span className="k">Phones found</span><span className="v">{drawer.intel.phones.join(', ')}</span></div>}
+                  {drawer.intel.yearFounded && <div className="kv"><span className="k">Year founded</span><span className="v">{drawer.intel.yearFounded}</span></div>}
+                  {drawer.intel.hoursText && <div className="kv"><span className="k">Hours</span><span className="v">{drawer.intel.hoursText}</span></div>}
+                  {drawer.intel.httpStatus != null && <div className="kv"><span className="k">Site status</span><span className="v">HTTP {drawer.intel.httpStatus}</span></div>}
+                  <div className="kv"><span className="k">Fetched</span><span className="v">{new Date(drawer.intel.fetchedAt).toLocaleString()}</span></div>
+                </>
+              ) : (
+                <p className="panel-desc">{drawer.lead.website ? 'No intel yet — click Refresh to scrape the site.' : 'No website on file.'}</p>
+              )}
             </div>
           </div>
           <div className="drawer-footer">

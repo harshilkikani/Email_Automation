@@ -30,6 +30,12 @@ export default function Discover() {
     const r = await api.post('/leads/import-csv', { csv });
     if (!r.ok) { t.push('error', 'CSV import failed', r.error); return; }
     t.push('success', 'CSV imported', `${r.data.inserted} inserted · ${r.data.skipped} skipped`);
+    e.target.value = '';
+    /* Imported leads start unverified; verify them like discovered ones. */
+    if (r.data.inserted > 0) {
+      const v = await api.post<{ verified: number }>('/leads/verify-pending', { limit: 500 });
+      if (v.ok) t.push('success', 'Emails verified', `${v.data?.verified ?? 0} checked`);
+    }
   };
 
   return (

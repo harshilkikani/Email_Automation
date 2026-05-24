@@ -106,7 +106,7 @@ export default function Campaigns() {
                 <strong>Anti-repeat protection is on.</strong> Suppressed, bounced, unsubscribed, and DNC leads are excluded automatically.
               </div>
               <button className="btn btn-primary" onClick={create} disabled={creating || !name}>
-                {creating ? <><span className="spinner"></span> Creating…</> : 'Create draft &amp; preview'}
+                {creating ? <><span className="spinner"></span> Creating…</> : 'Create draft & preview'}
               </button>
               <button className="btn btn-ghost btn-sm" style={{ marginLeft: 8 }} onClick={() => setView('list')}>Cancel</button>
             </div>

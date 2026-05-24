@@ -29,7 +29,9 @@ export default function SettingsPage() {
     if (fresh.ok && fresh.data) { setS(fresh.data); setDraft(fresh.data.org); }
   };
 
-  if (!s) return null;
+  if (!s) return (
+    <div className="container" style={{ padding: 24, color: 'var(--fg-3)' }}>Loading settings…</div>
+  );
   return (
     <>
       <div className="page-header">
