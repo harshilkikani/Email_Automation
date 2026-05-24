@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import { ToastProvider } from './toast';
-import { api, login } from './api';
+import { api, login, logout } from './api';
 import Dashboard from './pages/Dashboard';
 import Discover from './pages/Discover';
 import Leads from './pages/Leads';
@@ -32,7 +32,7 @@ const TABS = [
   { to: '/settings',        ico: '⚙', label: 'Settings' },
 ];
 
-function Login({ onAuth }: { onAuth: () => void }) {
+function Login({ onAuth, onClose }: { onAuth: () => void; onClose?: () => void }) {
   const [token, setToken] = useState('');
   const [err, setErr] = useState('');
   return (
@@ -42,14 +42,17 @@ function Login({ onAuth }: { onAuth: () => void }) {
           <h2 className="modal-title">Keres AI sign-in</h2>
         </div>
         <div className="modal-body">
-          <p className="panel-desc">Enter the access token to sign in.</p>
+          <p className="panel-desc">Enter the access token to make changes. Viewing doesn't require sign-in.</p>
           <div className="field" style={{ marginTop: 14 }}>
             <label className="field-label">Access token</label>
-            <input className="field-input" type="password" value={token} onChange={e => setToken(e.target.value)} />
+            <input className="field-input" type="password" value={token} autoFocus
+              onChange={e => setToken(e.target.value)}
+              onKeyDown={async e => { if (e.key === 'Enter') { const ok = await login(token); ok ? onAuth() : setErr('Invalid token'); } }} />
           </div>
           {err && <div className="callout danger">{err}</div>}
         </div>
         <div className="modal-footer">
+          {onClose && <button className="btn btn-ghost" onClick={onClose}>Cancel</button>}
           <button className="btn btn-primary" onClick={async () => {
             const ok = await login(token);
             if (ok) onAuth();
@@ -63,10 +66,18 @@ function Login({ onAuth }: { onAuth: () => void }) {
 
 export default function App() {
   const [healthy, setHealthy] = useState<boolean | null>(null);
-  const [authed, setAuthed] = useState<boolean | null>(null);
+  const [access, setAccess] = useState<{ authenticated: boolean; publicReadOnly: boolean } | null>(null);
+  const [showSignIn, setShowSignIn] = useState(false);
   const [sampleMode, setSampleMode] = useState(true);
   const [enableSes, setEnableSes] = useState<boolean | null>(null);
   const location = useLocation();
+
+  const loadStatus = () =>
+    api.get<{ authenticated: boolean; publicReadOnly: boolean }>('/auth/status').then(r => {
+      setAccess(r.data
+        ? { authenticated: !!r.data.authenticated, publicReadOnly: !!r.data.publicReadOnly }
+        : { authenticated: false, publicReadOnly: false });
+    });
 
   useEffect(() => {
     api.get('/health').then(r => {
@@ -76,8 +87,11 @@ export default function App() {
         setEnableSes(r.data.enableSes === true);
       }
     });
-    api.get('/settings').then(r => setAuthed(!!r.ok));
+    loadStatus();
   }, []);
+
+  const signedIn = !!access?.authenticated;
+  const canView = !!access && (access.authenticated || access.publicReadOnly);
 
   /* Setup-mode banner: production infra but outbound deliberately disabled.
      This is the safe state we want the operator to recognize, not "broken". */
@@ -88,20 +102,27 @@ export default function App() {
     </div>
   ) : null;
 
-  if (authed === null) {
+  if (access === null) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Inter, sans-serif', color: '#888', fontSize: 15 }}>
         Loading…
       </div>
     );
   }
-  if (authed === false) {
+  if (!canView) {
     return (
       <ToastProvider>
-        <Login onAuth={() => setAuthed(true)} />
+        <Login onAuth={loadStatus} />
       </ToastProvider>
     );
   }
+
+  const readOnlyBanner = !signedIn && access.publicReadOnly ? (
+    <div className="setup-banner" role="status">
+      <strong>Read-only view</strong>
+      <span>You're viewing a shared, read-only copy. Sign in with the access token to make changes.</span>
+    </div>
+  ) : null;
 
   return (
     <ToastProvider>
@@ -123,13 +144,18 @@ export default function App() {
             ))}
           </nav>
           <div className="nav-right">
+            {signedIn
+              ? <button className="btn btn-ghost btn-sm" onClick={async () => { await logout(); loadStatus(); }}>Sign out</button>
+              : <button className="btn btn-secondary btn-sm" onClick={() => setShowSignIn(true)}>Sign in</button>}
             <span className={'conn-pill ' + (healthy ? 'online' : 'offline')}>
               <span className="conn-dot"></span>
               <span>{healthy === null ? '…' : healthy ? (sampleMode ? 'Sample mode' : 'Live') : 'Offline'}</span>
             </span>
           </div>
         </header>
+        {readOnlyBanner}
         {setupBanner}
+        {showSignIn && <Login onAuth={() => { setShowSignIn(false); loadStatus(); }} onClose={() => setShowSignIn(false)} />}
         <main key={location.pathname} className="page">
           <Routes>
             <Route path="/" element={<Dashboard />} />

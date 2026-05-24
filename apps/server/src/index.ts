@@ -109,7 +109,19 @@ async function main() {
     if (!fs.existsSync(root)) {
       app.log.warn({ root }, 'SERVE_WEB=true but web dist not found; run `pnpm --filter @keres/web build` first');
     } else {
-      await app.register(fastifyStatic, { root, prefix: '/' });
+      await app.register(fastifyStatic, {
+        root, prefix: '/',
+        setHeaders: (res: { setHeader: (k: string, v: string) => void }, filePath: string) => {
+          /* Hashed bundles are content-addressed → cache forever. index.html
+             must always revalidate so clients pick up new bundle hashes after
+             a deploy (prevents stale-asset blank pages). */
+          if (/[/\\]assets[/\\]/.test(filePath)) {
+            res.setHeader('cache-control', 'public, max-age=31536000, immutable');
+          } else if (filePath.endsWith('index.html')) {
+            res.setHeader('cache-control', 'no-cache');
+          }
+        },
+      });
       spaEnabled = true;
       app.log.info({ root }, 'serving web SPA from API process');
     }
@@ -130,6 +142,14 @@ async function main() {
       });
     }
     if (spaEnabled) {
+      /* Only fall back to index.html for SPA navigation routes. A missing
+         static asset (anything with a file extension, e.g. a stale bundle
+         hash) must 404 — serving HTML for a .js request yields "expected
+         JavaScript, got text/html" and a blank page. */
+      if (/\.[a-z0-9]+(?:\?|$)/i.test(req.url)) {
+        reply.code(404).type('application/json');
+        return reply.send({ ok: false, error: 'not_found' });
+      }
       return reply.type('text/html').sendFile('index.html');
     }
     reply.code(404).type('application/json');

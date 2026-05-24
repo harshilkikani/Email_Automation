@@ -15,6 +15,10 @@ function getStoredToken(): string | null {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
+  /* Hard timeout so a stalled request (cold start, flaky network, blocked
+     XHR) can never leave the UI hanging forever — it settles as an error. */
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     const storedToken = getStoredToken();
@@ -24,6 +28,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       method,
       credentials: API_BASE ? 'omit' : 'include',
       headers,
+      signal: controller.signal,
     };
     if (body !== undefined) init.body = JSON.stringify(body);
     const res = await fetch(`${API_BASE}/api${path}`, init);
@@ -34,7 +39,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     }
     return { ok: true, data: json as T };
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? 'network_error' };
+    return { ok: false, error: e?.name === 'AbortError' ? 'timeout' : (e?.message ?? 'network_error') };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -86,27 +86,46 @@ export function registerAuth(app: FastifyInstance) {
     return reply.send({ ok: true });
   });
 
+  app.get('/api/auth/status', async (req) => ({
+    ok: true,
+    authenticated: requestIsAuthed(req, cfg),
+    publicReadOnly: cfg.publicReadOnly,
+  }));
+
   app.addHook('onRequest', (req: FastifyRequest, reply: FastifyReply, done) => {
-    /* Allow webhooks, unsubscribe, login, health, ready unauthenticated. */
+    /* Allow webhooks, unsubscribe, login, health, ready, auth status unauthenticated. */
     const url = req.url;
     const open =
       url === '/api/health' ||
       url === '/api/ready' ||
       url === '/api/auth/login' ||
       url === '/api/auth/logout' ||
+      url === '/api/auth/status' ||
       url.startsWith('/api/webhooks/') ||
       url.startsWith('/api/unsubscribe');
     if (open || !url.startsWith('/api/')) return done();
 
-    const bearer = (req.headers['authorization'] ?? '').toString();
-    if (bearer.startsWith('Bearer ')) {
-      const tok = bearer.slice(7);
-      if (tok.length === cfg.authToken.length && tokenEquals(tok, cfg.authToken)) return done();
-    }
-    const cookie = (req.cookies as Record<string, string | undefined>)?.[cfg.authCookieName];
-    if (cookie && verify(cookie, cfg.authCookieSecret)) return done();
+    if (requestIsAuthed(req, cfg)) return done();
+
+    /* Public read-only mode: anyone may read (GET/HEAD), but mutations still
+       require a valid token so random visitors can't change data or trigger
+       actions. */
+    if (cfg.publicReadOnly && (req.method === 'GET' || req.method === 'HEAD')) return done();
+
     reply.code(401).send({ ok: false, error: 'unauthorized' });
   });
+}
+
+/** True when the request carries a valid bearer token or session cookie. */
+export function requestIsAuthed(req: FastifyRequest, cfg = getConfig()): boolean {
+  const bearer = (req.headers['authorization'] ?? '').toString();
+  if (bearer.startsWith('Bearer ')) {
+    const tok = bearer.slice(7);
+    if (tok.length === cfg.authToken.length && tokenEquals(tok, cfg.authToken)) return true;
+  }
+  const cookie = (req.cookies as Record<string, string | undefined>)?.[cfg.authCookieName];
+  if (cookie && verify(cookie, cfg.authCookieSecret)) return true;
+  return false;
 }
 
 /** Test helper — reset the in-memory backoff. */

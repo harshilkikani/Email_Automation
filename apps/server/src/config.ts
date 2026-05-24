@@ -30,6 +30,9 @@ export interface KeresConfig {
   webPort: number;
   publicBaseUrl: string;
 
+  /** When true, GET/read requests are public (no token); mutations still require auth. */
+  publicReadOnly: boolean;
+
   authToken: string;
   authCookieName: string;
   authCookieSecret: string;
@@ -153,6 +156,8 @@ export function getConfig(): Readonly<KeresConfig> {
     port: num('PORT', 8080),
     webPort: num('WEB_PORT', 5173),
     publicBaseUrl: str('PUBLIC_BASE_URL', 'http://localhost:8080'),
+
+    publicReadOnly: bool('PUBLIC_READ_ONLY', false),
 
     authToken: str('AUTH_TOKEN', 'change-me'),
     authCookieName: str('AUTH_COOKIE_NAME', 'keres_session'),

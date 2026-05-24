@@ -17,6 +17,8 @@ primary_region = 'iad'
 [env]
   NODE_ENV = 'production'
   PORT = '8080'
+  # Public read-only: anyone can VIEW without the token; mutations still require auth.
+  PUBLIC_READ_ONLY = 'true'
 
 [http_service]
   internal_port = 8080
