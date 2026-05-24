@@ -1,0 +1,66 @@
+name: pages
+
+# Deploy the React SPA to GitHub Pages.
+# The SPA calls the production Fly.io backend via VITE_API_BASE.
+# Set VITE_API_BASE in the repo's Actions variables (Settings → Variables)
+# to the URL of your running backend, e.g. https://keres-ops.fly.dev
+# Also add that URL to the CORS_ORIGIN env var on the Fly.io machine.
+on:
+  push:
+    branches: [main, feature/production-layers]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build SPA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      # Build shared packages that the web app depends on
+      - run: pnpm -r --filter="./packages/**" run build
+
+      - name: Build web SPA
+        working-directory: apps/web
+        env:
+          # Sub-path for project pages (e.g. /Email_Automation/ for a project page).
+          # Change to / if you point a custom domain at this Pages site.
+          VITE_BASE: /${{ github.event.repository.name }}/
+          # Production Fly.io backend — the SPA calls this when running on Pages.
+          VITE_API_BASE: https://keres-ops.fly.dev
+        run: pnpm build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  deploy:
+    name: deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

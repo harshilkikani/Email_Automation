@@ -2,7 +2,18 @@
 
 > v3.1 architecture · sub-$5/mo · TypeScript monorepo · Vite + Fastify + Drizzle + Postgres.
 
+[![CI](https://github.com/harshilkikani/keres-ai/actions/workflows/test.yml/badge.svg)](https://github.com/harshilkikani/keres-ai/actions/workflows/test.yml)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/harshilkikani/keres-ai?quickstart=1)
+
 This repo is the production implementation of the architecture described in `docs/UPDATED-ARCHITECTURE.md` and the validation workflow in `docs/VALIDATION-MODE.md`. The original HTML mock + design briefs are archived under `docs/_design/` for traceability; the operator-facing docs in `docs/` are the source of truth.
+
+## Run instantly in the browser (GitHub Codespaces)
+
+Click the badge above — Codespaces spins up a container with Node 20, installs
+dependencies, starts Postgres, runs migrations and the seed, then opens the
+web UI automatically. No local setup required. The container runs with
+`SAMPLE_MODE=true` so every paid provider is mocked; edit `.env` to add real
+API keys.
 
 ## Quick start (local dev)
 
