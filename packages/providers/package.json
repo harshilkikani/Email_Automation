@@ -25,9 +25,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@aws-sdk/client-ses": "^3.620.0",
-    "@aws-sdk/client-sesv2": "^3.620.0",
-    "@aws-sdk/client-sns": "^3.620.0",
+    "@aws-sdk/client-ses": "^3.1053.0",
+    "@aws-sdk/client-sesv2": "^3.1053.0",
+    "@aws-sdk/client-sns": "^3.1053.0",
     "@keres/core": "workspace:*",
     "cheerio": "^1.0.0-rc.12",
     "google-libphonenumber": "^3.2.34",
