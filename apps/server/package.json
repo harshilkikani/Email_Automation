@@ -24,7 +24,7 @@
     "@keres/providers": "workspace:*",
     "@types/pg": "^8.11.6",
     "csv-parse": "^5.5.6",
-    "drizzle-orm": "^0.32.0",
+    "drizzle-orm": "^0.45.2",
     "fastify": "^4.28.1",
     "pg": "^8.12.0",
     "pino-pretty": "^11.2.1",
