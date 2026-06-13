@@ -79,6 +79,19 @@ export interface KeresConfig {
     apiKey: string;
   };
 
+  smtp: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    secure: boolean;
+    user: string;
+    pass: string;
+    fromEmail: string;
+    /** DNS-check expectations for a mailbox host (Spacemail defaults). */
+    spfInclude: string;
+    dkimSelector: string;
+  };
+
   postmarkInbound: {
     enabled: boolean;
     token: string;
@@ -236,6 +249,18 @@ export function getConfig(): Readonly<KeresConfig> {
       apiKey: str('RESEND_API_KEY'),
     },
 
+    smtp: {
+      enabled: bool('ENABLE_SMTP', false),
+      host: str('SMTP_HOST', 'mail.spacemail.com'),
+      port: num('SMTP_PORT', 465),
+      secure: bool('SMTP_SECURE', true),
+      user: str('SMTP_USER'),
+      pass: str('SMTP_PASS'),
+      fromEmail: str('SMTP_FROM') || str('FROM_EMAIL', 'hello@outreach.keresai.com'),
+      spfInclude: str('SMTP_SPF_INCLUDE', 'spf.spacemail.com'),
+      dkimSelector: str('SMTP_DKIM_SELECTOR', 'spacemail'),
+    },
+
     postmarkInbound: {
       enabled: bool('ENABLE_POSTMARK_INBOUND', false),
       token: str('POSTMARK_INBOUND_TOKEN'),
@@ -378,6 +403,9 @@ export function validateConfig(cfg: Readonly<KeresConfig>): ValidationIssue[] {
   }
   if (cfg.resend.enabled && !cfg.resend.apiKey) {
     issues.push({ severity: 'error', code: 'resend_missing_key', message: 'ENABLE_RESEND=true but RESEND_API_KEY is missing.' });
+  }
+  if (cfg.smtp.enabled && (!cfg.smtp.host || !cfg.smtp.user || !cfg.smtp.pass)) {
+    issues.push({ severity: 'error', code: 'smtp_missing_creds', message: 'ENABLE_SMTP=true but SMTP_HOST / SMTP_USER / SMTP_PASS are missing.' });
   }
   if (cfg.bouncer.enabled && !cfg.bouncer.apiKey) {
     issues.push({ severity: 'error', code: 'bouncer_no_key', message: 'ENABLE_BOUNCER=true but BOUNCER_API_KEY is empty.' });

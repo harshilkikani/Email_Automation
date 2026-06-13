@@ -44,6 +44,9 @@ export async function runDiagnostics(): Promise<Diagnostics> {
     db: dbState,
     migrations: { current: dbState === 'connected' && !!lastMigration, lastApplied: lastMigration },
     providers: {
+      smtp: cfg.smtp.enabled,
+      resend: cfg.resend.enabled,
+      mailgun: cfg.mailgun.enabled,
       ses: cfg.ses.enabled,
       postmark_inbound: cfg.postmarkInbound.enabled,
       osm: cfg.osm.enabled,

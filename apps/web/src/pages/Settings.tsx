@@ -9,7 +9,11 @@ interface Settings {
     physicalAddress: string; outreachSubdomain: string; defaultBookingLink: string;
     productionAccessConfirmed: boolean; budgetMode: string;
   };
-  runtime: { sampleMode: boolean; providersEnabled: Record<string, boolean> };
+  runtime: {
+    sampleMode: boolean;
+    providersEnabled: Record<string, boolean>;
+    outbound?: { provider: string; label: string; identity: string };
+  };
 }
 
 export default function SettingsPage() {
@@ -77,6 +81,28 @@ export default function SettingsPage() {
             </div>
           </div>
           <div>
+            <div className="panel">
+              <div className="panel-head"><h2>Outbound email</h2></div>
+              {s.runtime.outbound && (
+                <>
+                  <div className="kv"><span className="k">Sending via</span>
+                    <span className="v" style={{ color: s.runtime.outbound.provider === 'none' ? 'var(--danger, #c00)' : 'var(--accent)' }}>
+                      {s.runtime.outbound.label}</span></div>
+                  <div className="kv"><span className="k">From mailbox</span><span className="v">{s.runtime.outbound.identity}</span></div>
+                </>
+              )}
+              {s.runtime.sampleMode ? (
+                <div className="callout warn" style={{ marginTop: 10 }}>
+                  <strong>Sample mode is ON</strong> — sends use the in-memory mock and never leave the server.
+                  Set <code>SAMPLE_MODE=false</code> in <code>.env</code> after a green seedlist test to go live.
+                </div>
+              ) : s.runtime.outbound?.provider === 'smtp' ? (
+                <div className="callout" style={{ marginTop: 10 }}>
+                  Live SMTP. Run a <strong>seedlist test</strong> (Deliverability) before sending to prospects,
+                  and keep daily volume low while warming up.
+                </div>
+              ) : null}
+            </div>
             <div className="panel">
               <div className="panel-head"><h2>Runtime</h2></div>
               <div className="kv"><span className="k">Sample mode</span><span className="v">{s.runtime.sampleMode ? 'on' : 'off'}</span></div>

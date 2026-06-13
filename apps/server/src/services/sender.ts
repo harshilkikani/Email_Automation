@@ -105,15 +105,13 @@ export async function runDnsCheck(domain: string, opts: DnsCheckOptions = {}): P
     spfState = spfLine && includesEsp ? 'pass' : 'fail';
   } catch { spfState = 'fail'; }
 
-  /* DKIM — all required selectors must resolve to a CNAME. */
+  /* DKIM — each required selector must resolve. SES Easy DKIM publishes CNAMEs;
+     mailbox hosts like Spacemail publish a TXT record directly. Accept either. */
   const passing: string[] = [];
   const missing: string[] = [];
   for (const sel of required) {
-    try {
-      const cname = await resolvers.resolveCname(`${sel}._domainkey.${domain}`);
-      if (cname.length > 0) passing.push(sel);
-      else missing.push(sel);
-    } catch { missing.push(sel); }
+    if (await dkimSelectorResolves(resolvers, `${sel}._domainkey.${domain}`)) passing.push(sel);
+    else missing.push(sel);
   }
   const dkimState: DnsState = missing.length === 0 ? 'pass' : 'fail';
 
@@ -121,12 +119,10 @@ export async function runDnsCheck(domain: string, opts: DnsCheckOptions = {}): P
   const supplemental: Array<{ selector: string; resolved: boolean }> = [];
   for (const sel of SUPPLEMENTAL_SELECTORS) {
     if (required.includes(sel)) continue;
-    try {
-      const cname = await resolvers.resolveCname(`${sel}._domainkey.${domain}`);
-      supplemental.push({ selector: sel, resolved: cname.length > 0 });
-    } catch {
-      supplemental.push({ selector: sel, resolved: false });
-    }
+    supplemental.push({
+      selector: sel,
+      resolved: await dkimSelectorResolves(resolvers, `${sel}._domainkey.${domain}`),
+    });
   }
 
   /* DMARC */
@@ -184,6 +180,25 @@ export async function runDnsCheck(domain: string, opts: DnsCheckOptions = {}): P
     checkedAt: new Date().toISOString(),
     real: true,
   };
+}
+
+/**
+ * A DKIM selector "resolves" if it publishes a CNAME (SES Easy DKIM) OR a TXT
+ * record that looks like a DKIM key (mailbox hosts like Spacemail use TXT).
+ */
+async function dkimSelectorResolves(
+  resolvers: { resolveCname: (n: string) => Promise<string[]>; resolveTxt: (n: string) => Promise<string[][]> },
+  name: string,
+): Promise<boolean> {
+  try {
+    const cname = await resolvers.resolveCname(name);
+    if (cname.length > 0) return true;
+  } catch { /* fall through to TXT */ }
+  try {
+    const txt = (await resolvers.resolveTxt(name)).map(parts => parts.join(''));
+    return txt.some(r => /(^|;)\s*(v=DKIM1|k=rsa|p=[A-Za-z0-9+/=])/i.test(r));
+  } catch { /* not present */ }
+  return false;
 }
 
 function rootDomain(d: string): string {
