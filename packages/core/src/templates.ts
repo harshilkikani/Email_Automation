@@ -267,6 +267,12 @@ export interface RenderContext {
   fromName: string;
   fromSignoff?: string;
   subjectOverrides?: string[];
+  /**
+   * Pre-generated, fact-grounded opener (from the personalization tick). When
+   * present and non-empty it replaces the deterministic slot opener. The
+   * slotKey is still recorded (from the signals) for analytics.
+   */
+  opener?: string;
 }
 
 export interface RenderedEmail {
@@ -307,8 +313,10 @@ function pickByHash<T>(arr: T[], seed: bigint): T {
 export function renderEmail(template: Template, ctx: RenderContext): RenderedEmail {
   const seed = stableHash(ctx.leadId);
   const slotKey = pickSlot(ctx.signals);
-  const openers = template.openerVariants[slotKey] ?? template.openerVariants.default;
-  const opener = pickByHash(openers, seed);
+  /* Prefer a pre-generated personalized opener; else pick the deterministic
+     slot opener by stable hash. */
+  const slotOpeners = template.openerVariants[slotKey] ?? template.openerVariants.default;
+  const opener = (ctx.opener && ctx.opener.trim()) ? ctx.opener.trim() : pickByHash(slotOpeners, seed);
   const variants = ctx.subjectOverrides && ctx.subjectOverrides.length > 0
     ? ctx.subjectOverrides
     : template.subjectVariants;

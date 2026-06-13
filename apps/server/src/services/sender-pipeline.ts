@@ -212,6 +212,7 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
       fromName: senderIdentity.fromName,
       fromSignoff: org.name,
       subjectOverrides,
+      opener: signals?.personalizedOpener ?? undefined,
     });
     const msgId = `<${randomUUID()}@${cfg.org.outreachSubdomain}>`;
     const final = finalRender({

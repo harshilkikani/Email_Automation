@@ -39,6 +39,7 @@ import { tickWarmupEngine, refillHourlyTokens } from './warmup-engine.js';
 import { tickReplyBranches } from './reply-branches.js';
 import { tickSaturationRefresh } from './saturation.js';
 import { tickWebsiteIntelRefresh } from './website-intel.js';
+import { tickPersonalization } from './personalization.js';
 import { tickQueueMetrics } from './queue.js';
 import { withSpan } from '../observability.js';
 import { tickAiAnalysis } from './ai-analysis.js';
@@ -75,6 +76,7 @@ export function startScheduler(db: Database, log: FastifyBaseLogger): SchedulerH
     { name: 'budget_alert',       everyMs: 60 * 60 * 1000,       fn: tickBudgetAlert },
     { name: 'discovery_cron',     everyMs: 60 * 60 * 1000,       fn: tickDiscoveryCron },
     { name: 'website_intel',      everyMs: 6  * 60 * 60 * 1000,  fn: (db, log) => withSpan('tick.website_intel',   () => tickWebsiteIntelRefresh(db, log)) },
+    { name: 'personalization',    everyMs: 10 * 60 * 1000,       fn: (db, log) => withSpan('tick.personalization', () => tickPersonalization(db, log)) },
     { name: 'saturation_refresh', everyMs: 12 * 60 * 60 * 1000,  fn: (db, log) => withSpan('tick.saturation',      () => tickSaturationRefresh(db, log)) },
     { name: 'send_time_histogram', everyMs: 12 * 60 * 60 * 1000,       fn: tickSendTimeHistogram },
     { name: 'reputation_trend',   everyMs: 6  * 60 * 60 * 1000,       fn: tickReputationTrend },

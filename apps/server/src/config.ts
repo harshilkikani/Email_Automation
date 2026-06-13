@@ -148,6 +148,8 @@ export interface KeresConfig {
     ollamaUrl: string;
     ollamaModel: string;
     requestTimeoutMs: number;
+    /** When true, the batch tick generates fact-grounded personalized openers. */
+    personalization: boolean;
   };
 
   /**
@@ -310,6 +312,7 @@ export function getConfig(): Readonly<KeresConfig> {
       ollamaUrl: str('OLLAMA_URL', 'http://localhost:11434'),
       ollamaModel: str('OLLAMA_MODEL', 'llama3.1:8b-instruct-q4_K_M'),
       requestTimeoutMs: num('AI_REQUEST_TIMEOUT_MS', 60_000),
+      personalization: bool('AI_PERSONALIZATION', false),
     },
 
     closedLoopAutoApply: bool('CLOSED_LOOP_AUTO_APPLY', false),

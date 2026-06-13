@@ -38,6 +38,7 @@ import {
   applyScoringProposal, rejectScoringProposal,
 } from './services/closed-loop.js';
 import { refreshWebsiteIntelForLead } from './services/website-intel.js';
+import { personalizeLead } from './services/personalization.js';
 import { emitEvent } from './services/events.js';
 
 /* Get the single-tenant org id from env / db — cached for 60s to avoid per-request DB lookup. */
@@ -348,6 +349,19 @@ export function registerRoutes(app: FastifyInstance) {
     const r = await refreshWebsiteIntelForLead(getDb(), id);
     await writeAudit('website_intel_refresh', id, { ok: r.ok, reason: r.reason ?? null }, req);
     return r;
+  });
+
+  /* Regenerate the fact-grounded personalized opener for one lead (operator
+     review/redo). Clears the cache first so personalizeLead recomputes. */
+  app.post('/api/leads/:id/regenerate-opener', async (req) => {
+    const db = getDb();
+    const { id } = req.params as { id: string };
+    await db.update(schema.leadSignals)
+      .set({ personalizedOpener: null, personalizationFact: null, personalizationModel: null, personalizationAt: null })
+      .where(eq(schema.leadSignals.leadId, id));
+    const opener = await personalizeLead(db, id);
+    await writeAudit('regenerate_opener', id, { generated: !!opener }, req);
+    return { ok: true, opener };
   });
 
   app.patch('/api/leads/:id', async (req) => {
