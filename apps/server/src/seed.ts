@@ -23,6 +23,10 @@ async function main() {
     : cfg.mailgun.enabled ? 'mailgun.org'
     : 'amazonses.com';
   const dkimSelectors = cfg.smtp.enabled ? [cfg.smtp.dkimSelector] : undefined;
+  /* Mailbox hosts (Spacemail, etc.) send from shared, already-reputable IPs —
+     there's no dedicated IP to warm, so treat the domain as warmed. Dedicated-
+     IP ESPs (SES) start 'pending' and ramp. Sample mode is always 'warmed'. */
+  const initialWarmup = cfg.sampleMode || cfg.smtp.enabled ? 'warmed' : 'pending';
   try {
     const existing = await db.select({ id: schema.organizations.id }).from(schema.organizations).limit(1);
     let orgId: string;
@@ -51,24 +55,29 @@ async function main() {
       orgId = inserted[0]!.id;
       console.log(`org created: ${orgId}`);
     }
-    const sd = await db.select({ id: schema.senderDomains.id }).from(schema.senderDomains).where(eq(schema.senderDomains.orgId, orgId)).limit(1);
+    const sd = await db.select({ id: schema.senderDomains.id, warmupState: schema.senderDomains.warmupState })
+      .from(schema.senderDomains).where(eq(schema.senderDomains.orgId, orgId)).limit(1);
     if (!sd[0]) {
       await db.insert(schema.senderDomains).values({
         orgId, domain: cfg.org.outreachSubdomain,
         sesConfigurationSet: cfg.ses.configurationSet,
         dailySendBudget: cfg.dailySendCapDefault,
-        warmupState: cfg.sampleMode ? 'warmed' : 'pending',
+        warmupState: initialWarmup,
         spfExpectedInclude: spfInclude,
         ...(dkimSelectors ? { dkimSelectors } : {}),
       });
-      console.log(`sender_domain created (${cfg.org.outreachSubdomain}, SPF include: ${spfInclude}${dkimSelectors ? `, DKIM: ${dkimSelectors.join(',')}` : ''})`);
+      console.log(`sender_domain created (${cfg.org.outreachSubdomain}, warmup: ${initialWarmup}, SPF include: ${spfInclude}${dkimSelectors ? `, DKIM: ${dkimSelectors.join(',')}` : ''})`);
     } else {
+      /* Promote a mailbox-host domain out of 'pending' (pre-warmed IPs); never
+         override a deliberate 'paused'. */
+      const promote = cfg.smtp.enabled && sd[0].warmupState === 'pending';
       await db.update(schema.senderDomains).set({
         domain: cfg.org.outreachSubdomain,
         spfExpectedInclude: spfInclude,
         ...(dkimSelectors ? { dkimSelectors } : {}),
+        ...(promote ? { warmupState: 'warmed' } : {}),
       }).where(eq(schema.senderDomains.id, sd[0].id));
-      console.log(`sender_domain reconciled (${cfg.org.outreachSubdomain}, SPF include: ${spfInclude}${dkimSelectors ? `, DKIM: ${dkimSelectors.join(',')}` : ''})`);
+      console.log(`sender_domain reconciled (${cfg.org.outreachSubdomain}${promote ? ', warmup: warmed' : ''}, SPF include: ${spfInclude}${dkimSelectors ? `, DKIM: ${dkimSelectors.join(',')}` : ''})`);
     }
     const sv = await db.select({ id: schema.scoringVersions.id }).from(schema.scoringVersions).where(eq(schema.scoringVersions.id, 1)).limit(1);
     if (!sv[0]) {
