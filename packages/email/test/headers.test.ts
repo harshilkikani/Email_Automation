@@ -19,7 +19,7 @@ describe('RFC 8058 headers', () => {
       identity, to: 'lead@example.com', subject: 'Quick question',
       unsubscribeToken: tok, messageId: '<test@out.keres.com>',
     });
-    expect(h['List-Unsubscribe']).toContain('https://app.keres.com/unsubscribe/');
+    expect(h['List-Unsubscribe']).toContain('https://app.keres.com/api/unsubscribe/');
     expect(h['List-Unsubscribe']).toContain('mailto:unsub@outreach.keres.com');
     expect(h['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click');
     expect(h.From).toContain('Keres AI Outreach');
@@ -43,7 +43,7 @@ describe('RFC 8058 headers', () => {
 describe('CAN-SPAM footer', () => {
   it('contains organization, address, unsubscribe link', () => {
     const tok = signUnsubscribeToken({ email: 'lead@example.com', scope: 'org-1' }, SECRET);
-    const url = `${identity.publicBaseUrl}/unsubscribe/${tok}`;
+    const url = `${identity.publicBaseUrl}/api/unsubscribe/${tok}`;
     const footer = canSpamFooter(identity, url);
     expect(footer).toContain('Keres AI');
     expect(footer).toContain('1 Example St, Austin TX 78701');

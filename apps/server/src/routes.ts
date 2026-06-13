@@ -704,9 +704,16 @@ ${r.ok
 </body></html>`);
   });
 
+  /* RFC 8058 one-click: mailbox providers POST to the exact List-Unsubscribe URL
+     (which is /api/unsubscribe/:token), body `List-Unsubscribe=One-Click`. */
+  app.post('/api/unsubscribe/:token', async (req, reply) => {
+    const { token } = req.params as { token: string };
+    const r = await processUnsubscribe(getDb(), token);
+    return reply.code(r.ok ? 200 : 400).send(r);
+  });
+
+  /* Legacy one-click POST with token in query/body (kept for back-compat). */
   app.post('/api/unsubscribe', async (req, reply) => {
-    /* RFC 8058 one-click POST. Body is application/x-www-form-urlencoded with
-       `List-Unsubscribe=One-Click` plus our token in the query string. */
     const params = req.query as Record<string, string | undefined>;
     let token = params.token;
     if (!token) {

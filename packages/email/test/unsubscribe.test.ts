@@ -25,6 +25,6 @@ describe('unsubscribe tokens', () => {
     expect(verifyUnsubscribeToken(tok, SECRET)).toBeNull();
   });
   it('unsubscribeUrl builds correctly', () => {
-    expect(unsubscribeUrl('https://app.keres.com', 'abc.def')).toBe('https://app.keres.com/unsubscribe/abc.def');
+    expect(unsubscribeUrl('https://app.keres.com', 'abc.def')).toBe('https://app.keres.com/api/unsubscribe/abc.def');
   });
 });
