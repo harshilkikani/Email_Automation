@@ -146,6 +146,9 @@ export function registerRoutes(app: FastifyInstance) {
       runtime: {
         sampleMode: cfg.sampleMode,
         providersEnabled: {
+          smtp: cfg.smtp.enabled,
+          resend: cfg.resend.enabled,
+          mailgun: cfg.mailgun.enabled,
           ses: cfg.ses.enabled,
           postmarkInbound: cfg.postmarkInbound.enabled,
           osm: cfg.osm.enabled,
@@ -154,6 +157,12 @@ export function registerRoutes(app: FastifyInstance) {
           bouncer: cfg.bouncer.enabled,
           places: cfg.places.enabled,
         },
+        outbound: cfg.smtp.enabled
+          ? { provider: 'smtp', label: `SMTP — ${cfg.smtp.host}`, identity: cfg.smtp.user }
+          : cfg.resend.enabled ? { provider: 'resend', label: 'Resend', identity: cfg.org.fromEmail }
+          : cfg.mailgun.enabled ? { provider: 'mailgun', label: `Mailgun — ${cfg.mailgun.domain}`, identity: cfg.org.fromEmail }
+          : cfg.ses.enabled ? { provider: 'ses', label: `AWS SES — ${cfg.ses.region}`, identity: cfg.org.fromEmail }
+          : { provider: cfg.sampleMode ? 'mock' : 'none', label: cfg.sampleMode ? 'Mock (sample mode)' : 'Not configured', identity: cfg.org.fromEmail },
       },
     };
   });
@@ -183,11 +192,22 @@ export function registerRoutes(app: FastifyInstance) {
   app.post('/api/sender-domains', async (req) => {
     const db = getDb();
     const orgId = await singleOrgId();
-    const b = req.body as { domain: string; sesConfigurationSet?: string; dailySendBudget?: number };
+    const b = req.body as { domain: string; sesConfigurationSet?: string; dailySendBudget?: number; spfInclude?: string; dkimSelectors?: string[] };
     if (!b?.domain) return { ok: false, error: 'missing_domain' };
+    /* Default the DNS-check expectations to whatever outbound provider is active
+       so "Check DNS" validates the right records (Spacemail ≠ SES). The schema
+       defaults to SES (amazonses.com / s1,s2,s3); override for other hosts. */
+    const spfInclude = b.spfInclude
+      ?? (cfg.smtp.enabled ? cfg.smtp.spfInclude
+        : cfg.mailgun.enabled ? 'mailgun.org'
+        : 'amazonses.com');
+    const dkimSelectors = b.dkimSelectors
+      ?? (cfg.smtp.enabled ? [cfg.smtp.dkimSelector] : undefined);
     const r = await db.insert(schema.senderDomains).values({
       orgId, domain: b.domain, sesConfigurationSet: b.sesConfigurationSet ?? cfg.ses.configurationSet,
       dailySendBudget: b.dailySendBudget ?? cfg.dailySendCapDefault,
+      spfExpectedInclude: spfInclude,
+      ...(dkimSelectors ? { dkimSelectors } : {}),
     }).returning({ id: schema.senderDomains.id });
     return { ok: true, id: r[0]?.id };
   });
@@ -860,6 +880,9 @@ ${r.ok
       yelp:    cfg.yelp.enabled,
       places:  cfg.places.enabled,
       ses:     cfg.ses.enabled,
+      smtp:    cfg.smtp.enabled,
+      resend:  cfg.resend.enabled,
+      mailgun: cfg.mailgun.enabled,
     };
 
     return {

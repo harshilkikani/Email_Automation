@@ -1,10 +1,11 @@
 /**
  * Selects the outbound provider once and caches it.
- * Priority: SAMPLE_MODE → MockOutbound; ENABLE_MAILGUN → MailgunAdapter;
- * ENABLE_SES → SesAdapter; else MockOutbound (sends nothing).
+ * Priority: SAMPLE_MODE → MockOutbound; ENABLE_SMTP → SmtpAdapter (Spacemail);
+ * ENABLE_RESEND → ResendAdapter; ENABLE_MAILGUN → MailgunAdapter;
+ * ENABLE_SES → SesAdapter; else MockOutbound.
  */
 import type { OutboundProvider } from '@keres/providers';
-import { MailgunAdapter, MockOutbound, ResendAdapter, SesAdapter } from '@keres/providers';
+import { MailgunAdapter, MockOutbound, ResendAdapter, SesAdapter, SmtpAdapter } from '@keres/providers';
 import { getConfig } from '../config.js';
 
 let provider: OutboundProvider | null = null;
@@ -14,6 +15,16 @@ export function getOutbound(): OutboundProvider {
   const cfg = getConfig();
   if (cfg.sampleMode) {
     provider = new MockOutbound();
+  } else if (cfg.smtp.enabled) {
+    provider = new SmtpAdapter({
+      enabled: true,
+      host: cfg.smtp.host,
+      port: cfg.smtp.port,
+      secure: cfg.smtp.secure,
+      user: cfg.smtp.user,
+      pass: cfg.smtp.pass,
+      fromEmail: cfg.smtp.fromEmail,
+    });
   } else if (cfg.resend.enabled) {
     provider = new ResendAdapter({ enabled: true, apiKey: cfg.resend.apiKey });
   } else if (cfg.mailgun.enabled) {

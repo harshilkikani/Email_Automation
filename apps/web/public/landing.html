@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Keres AI — Never miss another customer</title>
+  <meta name="description" content="Keres AI gives local service businesses an always-on AI receptionist that answers, qualifies, and books every lead — so you never miss a job." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0b0c0e; --panel: #131519; --line: #23262d;
+      --fg: #f3f4f6; --fg-2: #c3c7cf; --fg-3: #868c98;
+      --accent: #c8a24a; --accent-2: #e7c878;
+      --serif: 'Instrument Serif', Georgia, serif;
+      --sans: 'Inter', system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body { background: var(--bg); color: var(--fg); font-family: var(--sans); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+    a { color: inherit; text-decoration: none; }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+
+    header { border-bottom: 1px solid var(--line); position: sticky; top: 0; background: rgba(11,12,14,.82); backdrop-filter: blur(10px); z-index: 10; }
+    .nav { display: flex; align-items: center; justify-content: space-between; height: 68px; }
+    .brand { font-family: var(--serif); font-size: 26px; letter-spacing: .3px; }
+    .brand b { color: var(--accent); font-weight: 400; }
+    .nav a.cta { border: 1px solid var(--accent); color: var(--accent-2); padding: 9px 18px; border-radius: 999px; font-size: 14px; font-weight: 600; transition: .15s; }
+    .nav a.cta:hover { background: var(--accent); color: #1a1407; }
+
+    .hero { padding: 110px 0 80px; text-align: center; }
+    .eyebrow { color: var(--accent-2); font-size: 13px; letter-spacing: 2.5px; text-transform: uppercase; font-weight: 600; }
+    .hero h1 { font-family: var(--serif); font-size: clamp(42px, 7vw, 76px); line-height: 1.04; margin: 20px auto 22px; max-width: 16ch; font-weight: 400; }
+    .hero h1 i { color: var(--accent-2); }
+    .hero p.lead { color: var(--fg-2); font-size: clamp(17px, 2.4vw, 21px); max-width: 60ch; margin: 0 auto 36px; }
+    .btns { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+    .btn { padding: 14px 28px; border-radius: 999px; font-weight: 600; font-size: 15px; transition: .15s; border: 1px solid transparent; }
+    .btn-primary { background: var(--accent); color: #1a1407; }
+    .btn-primary:hover { background: var(--accent-2); }
+    .btn-ghost { border-color: var(--line); color: var(--fg-2); }
+    .btn-ghost:hover { border-color: var(--fg-3); color: var(--fg); }
+    .micro { color: var(--fg-3); font-size: 13px; margin-top: 18px; }
+
+    section.band { padding: 64px 0; border-top: 1px solid var(--line); }
+    .kicker { font-family: var(--serif); font-size: clamp(28px, 4vw, 40px); text-align: center; margin-bottom: 14px; font-weight: 400; }
+    .sub { text-align: center; color: var(--fg-3); max-width: 56ch; margin: 0 auto 48px; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 26px; }
+    .card .num { font-family: var(--serif); font-size: 30px; color: var(--accent); }
+    .card h3 { font-size: 17px; margin: 12px 0 8px; }
+    .card p { color: var(--fg-3); font-size: 14.5px; }
+
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 18px; text-align: center; }
+    .stat .big { font-family: var(--serif); font-size: 52px; color: var(--accent-2); line-height: 1; }
+    .stat .lbl { color: var(--fg-3); font-size: 14px; margin-top: 8px; }
+
+    .cta-band { text-align: center; }
+    .cta-band h2 { font-family: var(--serif); font-size: clamp(32px, 5vw, 52px); font-weight: 400; max-width: 18ch; margin: 0 auto 18px; }
+    .cta-band p { color: var(--fg-2); margin-bottom: 30px; }
+    .mail { font-family: var(--serif); font-size: 22px; color: var(--accent-2); }
+
+    footer { border-top: 1px solid var(--line); padding: 36px 0; color: var(--fg-3); font-size: 13px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+
+    ul.checks { max-width: 620px; margin: 0 auto; list-style: none; display: grid; gap: 12px; }
+    ul.checks li { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; display: flex; gap: 14px; align-items: flex-start; }
+    ul.checks .tick { color: var(--accent); font-weight: 700; }
+    ul.checks b { font-weight: 600; }
+    ul.checks span.d { color: var(--fg-3); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap nav">
+      <div class="brand">Keres<b>·</b>AI</div>
+      <a class="cta" href="mailto:ops@keresai.com?subject=I%27d%20like%20a%20Keres%20AI%20demo">Get a demo</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap">
+        <div class="eyebrow">AI receptionist for local service businesses</div>
+        <h1>Stop letting missed calls become <i>missed jobs</i>.</h1>
+        <p class="lead">Septic, HVAC, roofing, plumbing — the lead that goes to voicemail goes to your competitor. Keres AI answers every inquiry, qualifies it, and books the appointment, day or night.</p>
+        <div class="btns">
+          <a class="btn btn-primary" href="mailto:ops@keresai.com?subject=I%27d%20like%20a%20Keres%20AI%20demo">Book a 15-min intro</a>
+          <a class="btn btn-ghost" href="#how">See how it works</a>
+        </div>
+        <div class="micro">No setup fees · Works with your existing number · Cancel anytime</div>
+      </div>
+    </section>
+
+    <section class="band" id="how">
+      <div class="wrap">
+        <h2 class="kicker">From inquiry to booked job</h2>
+        <p class="sub">A receptionist that never sleeps, never takes lunch, and never lets a lead sit in voicemail.</p>
+        <div class="grid">
+          <div class="card"><div class="num">01</div><h3>Answers instantly</h3><p>Every call and message is picked up on the first ring, 24/7 — including nights, weekends, and your busiest mornings.</p></div>
+          <div class="card"><div class="num">02</div><h3>Qualifies the lead</h3><p>It asks the right questions — service type, location, urgency — so you only spend time on jobs worth winning.</p></div>
+          <div class="card"><div class="num">03</div><h3>Books the appointment</h3><p>Ready-to-serve customers land directly on your calendar, with the details texted to you and to them.</p></div>
+          <div class="card"><div class="num">04</div><h3>Follows up</h3><p>Quiet leads get a polite, automatic nudge — so the estimate you almost lost turns into revenue.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="wrap">
+        <div class="stats">
+          <div class="stat"><div class="big">62%</div><div class="lbl">of calls to small businesses go unanswered</div></div>
+          <div class="stat"><div class="big">24/7</div><div class="lbl">coverage without hiring a single person</div></div>
+          <div class="stat"><div class="big">&lt;1 min</div><div class="lbl">to respond — when speed wins the job</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="wrap">
+        <h2 class="kicker">Built for the trades</h2>
+        <p class="sub">Practical, no-nonsense automation for owner-operated service businesses.</p>
+        <ul class="checks">
+          <li><span class="tick">✓</span><div><b>Keeps your number.</b> <span class="d">Customers call the same line they always have — Keres AI just makes sure someone answers.</span></div></li>
+          <li><span class="tick">✓</span><div><b>Honest, plain conversations.</b> <span class="d">No robotic scripts. It sounds like a competent front-desk person who knows your trade.</span></div></li>
+          <li><span class="tick">✓</span><div><b>You stay in control.</b> <span class="d">Set your hours, services, and service area. Every booking and transcript lands in your inbox.</span></div></li>
+          <li><span class="tick">✓</span><div><b>Affordable by design.</b> <span class="d">A fraction of the cost of a part-time receptionist, with none of the scheduling headaches.</span></div></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="band cta-band">
+      <div class="wrap">
+        <h2>Let's get your next missed call booked instead.</h2>
+        <p>Tell us your trade and your town. We'll set up a quick demo on your own number.</p>
+        <a class="btn btn-primary" href="mailto:ops@keresai.com?subject=Keres%20AI%20demo%20request&body=My%20business%3A%20%0AMy%20trade%3A%20%0AMy%20town%3A%20">Email ops@keresai.com</a>
+        <p style="margin-top:22px"><a class="mail" href="mailto:ops@keresai.com">ops@keresai.com</a></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap">
+    <div>© <span id="yr">2026</span> Keres AI. All rights reserved.</div>
+    <div>Questions? <a href="mailto:ops@keresai.com" style="color:var(--accent-2)">ops@keresai.com</a></div>
+  </footer>
+</body>
+</html>

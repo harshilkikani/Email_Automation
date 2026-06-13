@@ -59,7 +59,7 @@ export default function Deliverability() {
     <>
       <div className="page-header">
         <h1 className="page-title">Inbox <span className="it">deliverability</span></h1>
-        <p className="page-subtitle">SPF + DKIM (all 3 SES selectors) + DMARC + unsubscribe reachability. Production sends are blocked until all four are green.</p>
+        <p className="page-subtitle">SPF + DKIM + DMARC + unsubscribe reachability. Production sends are blocked until all four are green.</p>
       </div>
       <div className="container">
         <div className="panel">
@@ -101,7 +101,7 @@ export default function Deliverability() {
                 {r.lastCheckDetail?.detail?.dkim?.missing?.length > 0 && (
                   <div className="callout danger" style={{ marginTop: 10 }}>
                     <strong>DKIM missing selectors:</strong> {r.lastCheckDetail.detail.dkim.missing.join(', ')}.
-                    SES Easy DKIM requires all three (s1, s2, s3).
+                    Publish the selector(s) your mail host provides (Spacemail uses <code>spacemail</code>; SES uses s1/s2/s3).
                   </div>
                 )}
                 {r.lastCheckDetail?.detail?.spf?.includesEsp === false && (

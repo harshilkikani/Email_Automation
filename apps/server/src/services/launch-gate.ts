@@ -81,7 +81,7 @@ export async function evaluateLaunchGate(db: Database, opts: LaunchGateOptions):
     'docs/COMPLIANCE.md');
 
   /* ── SES production access (SES-only check) ── */
-  const anyRealOutbound = cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled;
+  const anyRealOutbound = cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled || cfg.smtp.enabled;
   if (cfg.ses.enabled) {
     push(checks, 'ses_production_access', 'SES production access confirmed',
       org?.productionAccessConfirmed ? 'pass' : 'fail',
@@ -90,14 +90,14 @@ export async function evaluateLaunchGate(db: Database, opts: LaunchGateOptions):
   }
 
   /* ── Outbound provider configured ── */
-  const outboundLabel = cfg.resend.enabled ? 'Outbound provider configured (Resend)'
+  const outboundLabel = cfg.smtp.enabled ? `Outbound provider configured (SMTP — ${cfg.smtp.host})`
+    : cfg.resend.enabled ? 'Outbound provider configured (Resend)'
     : cfg.mailgun.enabled ? 'Outbound provider configured (Mailgun)'
-    : 'Outbound provider configured (SES)';
-  const outboundFix = cfg.resend.enabled
-    ? 'Set ENABLE_RESEND=true and RESEND_API_KEY in Fly secrets.'
-    : cfg.mailgun.enabled
-    ? 'Set ENABLE_MAILGUN=true, MAILGUN_API_KEY, and MAILGUN_DOMAIN in Fly secrets.'
-    : 'Set ENABLE_SES=true and provide region + credentials in .env.';
+    : cfg.ses.enabled ? 'Outbound provider configured (SES)'
+    : 'Outbound provider configured';
+  const outboundFix = anyRealOutbound
+    ? undefined
+    : 'Enable one: ENABLE_SMTP=true + SMTP_HOST/SMTP_USER/SMTP_PASS (any mailbox, e.g. Spacemail); or ENABLE_RESEND=true + RESEND_API_KEY (free, no credit card); or ENABLE_MAILGUN=true + MAILGUN_API_KEY + MAILGUN_DOMAIN; or ENABLE_SES=true + region/credentials.';
   push(checks, 'outbound_configured', outboundLabel,
     anyRealOutbound || cfg.sampleMode ? 'pass' : 'fail',
     anyRealOutbound ? undefined : 'No outbound provider enabled.',
@@ -127,7 +127,9 @@ export async function evaluateLaunchGate(db: Database, opts: LaunchGateOptions):
     domain ? undefined : 'No sender_domains row. Add one in Deliverability.');
 
   if (domain) {
-    const spfFix = cfg.resend.enabled
+    const spfFix = cfg.smtp.enabled
+      ? `Add a TXT record on ${domain.domain}: v=spf1 include:${domain.spfExpectedInclude ?? 'spf.spacemail.com'} ~all (mailbox host's SPF include — Spacemail uses spf.spacemail.com).`
+      : cfg.resend.enabled
       ? 'Add TXT record: v=spf1 include:amazonses.com ~all (Resend sends via SES infrastructure).'
       : cfg.mailgun.enabled
       ? 'Add TXT record: v=spf1 include:mailgun.org ~all on your sending domain.'
@@ -135,12 +137,17 @@ export async function evaluateLaunchGate(db: Database, opts: LaunchGateOptions):
     push(checks, 'spf_pass', 'SPF aligned to ESP', domain.spfStatus === 'pass' ? 'pass' : 'fail',
       domain.spfStatus === 'pass' ? undefined : 'SPF record missing or wrong include directive.',
       spfFix);
-    const dkimFix = cfg.resend.enabled
+    const dkimFix = cfg.smtp.enabled
+      ? `Your mailbox host publishes DKIM automatically. Confirm a TXT (or CNAME) record exists at ${(domain.dkimSelectors?.[0] ?? 'spacemail')}._domainkey.${domain.domain} — Spacemail provisions it with the mailbox.`
+      : cfg.resend.enabled
       ? 'In Resend dashboard → Domains, copy the DKIM CNAME record into your DNS and wait for verification.'
       : cfg.mailgun.enabled
       ? 'In Mailgun → Sending → Domains, copy the DKIM TXT record into your DNS.'
       : 'In AWS SES → verified identities, copy the 3 DKIM CNAMEs into your DNS.';
-    const dkimLabel = cfg.resend.enabled ? 'DKIM (Resend)' : cfg.mailgun.enabled ? 'DKIM (Mailgun)' : 'DKIM (3 SES selectors)';
+    const dkimLabel = cfg.smtp.enabled ? 'DKIM (mailbox selector)'
+      : cfg.resend.enabled ? 'DKIM (Resend)'
+      : cfg.mailgun.enabled ? 'DKIM (Mailgun)'
+      : 'DKIM (3 SES selectors)';
     push(checks, 'dkim_pass', dkimLabel, domain.dkimStatus === 'pass' ? 'pass' : 'fail',
       domain.dkimStatus === 'pass' ? undefined : 'DKIM record missing or not yet verified.',
       dkimFix);

@@ -33,13 +33,20 @@ async function main() {
     }
     const sd = await db.select({ id: schema.senderDomains.id }).from(schema.senderDomains).where(eq(schema.senderDomains.orgId, orgId)).limit(1);
     if (!sd[0]) {
+      /* Default the DNS-check expectations to the active outbound provider so
+         "Check DNS" validates the right records (Spacemail ≠ SES). */
+      const spfInclude = cfg.smtp.enabled ? cfg.smtp.spfInclude
+        : cfg.mailgun.enabled ? 'mailgun.org'
+        : 'amazonses.com';
       await db.insert(schema.senderDomains).values({
         orgId, domain: cfg.org.outreachSubdomain,
         sesConfigurationSet: cfg.ses.configurationSet,
         dailySendBudget: cfg.dailySendCapDefault,
         warmupState: cfg.sampleMode ? 'warmed' : 'pending',
+        spfExpectedInclude: spfInclude,
+        ...(cfg.smtp.enabled ? { dkimSelectors: [cfg.smtp.dkimSelector] } : {}),
       });
-      console.log('sender_domain created');
+      console.log(`sender_domain created (SPF include: ${spfInclude}${cfg.smtp.enabled ? `, DKIM: ${cfg.smtp.dkimSelector}` : ''})`);
     }
     const sv = await db.select({ id: schema.scoringVersions.id }).from(schema.scoringVersions).where(eq(schema.scoringVersions.id, 1)).limit(1);
     if (!sv[0]) {
