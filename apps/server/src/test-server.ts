@@ -20,6 +20,7 @@ export async function buildTestApp(): Promise<FastifyInstance> {
   const app = Fastify({
     logger: false,
     bodyLimit: 10 * 1024 * 1024,
+    maxParamLength: 1024,   // match prod: unsubscribe tokens are ~200 chars
   });
   await app.register(cors, { origin: true, credentials: true });
   await app.register(cookie, { secret: cfg.authCookieSecret });

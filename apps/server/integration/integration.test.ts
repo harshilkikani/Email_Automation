@@ -524,6 +524,20 @@ describe('integration: Keres AI end-to-end', () => {
     expect(n).toBeGreaterThanOrEqual(6);
   });
 
+  it.runIf(pgReachable)('unsubscribe: a real (~200-char) token routes to the handler (not 404)', async () => {
+    const { signUnsubscribeToken, unsubscribeUrl } = await import('@keres/email/unsubscribe');
+    const { getConfig } = await import('../src/config.js');
+    const cfg = getConfig();
+    const token = signUnsubscribeToken({ email: 'unsub-it@example.test', scope: 'GLOBAL', campaignId: undefined }, cfg.unsubscribeSigningSecret);
+    expect(token.length).toBeGreaterThan(120);   // exceeds Fastify's default maxParamLength of 100
+    const path = new URL(unsubscribeUrl('http://x', token)).pathname;   // /api/unsubscribe/<token>
+    const get = await app!.inject({ method: 'GET', url: path });
+    expect(get.statusCode).not.toBe(404);          // 404 if maxParamLength weren't raised
+    expect(get.body).toMatch(/unsubscrib/i);
+    const post = await app!.inject({ method: 'POST', url: path, payload: 'List-Unsubscribe=One-Click', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+    expect(post.statusCode).toBe(200);             // RFC 8058 one-click at the same URL
+  });
+
   it('reports the skip reason when Postgres is unreachable', () => {
     if (!pgReachable) {
 
