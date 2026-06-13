@@ -120,7 +120,7 @@ export function registerRoutes(app: FastifyInstance) {
     ok: true,
     sampleMode: cfg.sampleMode,
     mode: cfg.budgetMode,
-    enableSes: cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled,
+    enableSes: cfg.smtp.enabled || cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled,
   }));
 
   /* ────────────── Settings ────────────── */
@@ -1263,7 +1263,7 @@ ${r.ok
           docs: c.docs ?? null,
         }));
       const safeToUseForSetup =
-        d.db === 'connected' && d.migrations.current && !cfg.sampleMode && !cfg.ses.enabled && !cfg.resend.enabled;
+        d.db === 'connected' && d.migrations.current && !cfg.sampleMode && !cfg.smtp.enabled && !cfg.ses.enabled && !cfg.resend.enabled;
       const ok = d.ok && blockers.length === 0;
       const payload = {
         ok,
@@ -1272,8 +1272,8 @@ ${r.ok
         warningCount: d.gate.warningCount,
         blockers,
         safeToUseForSetup,
-        realOutboundEnabled: (cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled) && !cfg.sampleMode,
-        enableSes: cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled,
+        realOutboundEnabled: (cfg.smtp.enabled || cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled) && !cfg.sampleMode,
+        enableSes: cfg.smtp.enabled || cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled,
         sampleMode: cfg.sampleMode,
         db: d.db,
         migrations: d.migrations,
@@ -1288,8 +1288,8 @@ ${r.ok
         reason: 'diagnostics_threw',
         error: e?.message ?? String(e),
         safeToUseForSetup: false,
-        realOutboundEnabled: (cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled) && !cfg.sampleMode,
-        enableSes: cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled,
+        realOutboundEnabled: (cfg.smtp.enabled || cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled) && !cfg.sampleMode,
+        enableSes: cfg.smtp.enabled || cfg.ses.enabled || cfg.mailgun.enabled || cfg.resend.enabled,
         sampleMode: cfg.sampleMode,
         timestamp,
       };
