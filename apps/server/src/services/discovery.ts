@@ -12,7 +12,7 @@ import {
 } from '@keres/core';
 import { scoreLeadEnhanced } from './scoring.js';
 import {
-  OsmAdapter, OsmSampleAdapter, PlacesAdapter, type DiscoveryProvider,
+  OsmAdapter, OsmSampleAdapter, PlacesAdapter, FoursquareAdapter, type DiscoveryProvider,
   YelpAdapter, Scraper, classifyPhone, LicenseRegistry,
 } from '@keres/providers';
 import { getVerifier } from './verify.js';
@@ -47,29 +47,35 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
   const licenses = new LicenseRegistry(cfg.sampleMode);
   const verifier = getVerifier();
 
-  /* Primary source: Google Places (New) when enabled — real businesses across any
-     industry, with websites to scrape. Falls back to OSM otherwise. */
+  /* Multi-source discovery: aggregate every enabled provider so we get the most
+     real businesses (with websites) per run. Order = best coverage first; OSM is
+     the always-on free fallback. Cross-source + DB dedupe happens in the main
+     loop below via the dedupe index. */
   const places = new PlacesAdapter({ enabled: cfg.places.enabled && !cfg.sampleMode, apiKey: cfg.places.apiKey });
-  let rawCandidates: LeadCandidate[];
-  let attribution = '';
-  if (places.isEnabled()) {
-    const r = await places.search({ niche: input.niche, city: input.city, state: input.state, targetCount: input.targetCount * 2 });
-    rawCandidates = r.candidates; attribution = r.attribution ?? '';
-    if (r.costCents > 0) {
-      await db.insert(schema.costEvents).values({
-        orgId: input.orgId, provider: 'places', sku: 'text_search',
-        unitCount: 1, costCents: r.costCents,
-      }).catch(() => undefined);
-    }
-    /* If Places returned nothing (e.g. budget/key issue), fall back to OSM. */
-    if (rawCandidates.length === 0) {
-      const o = await osm.search({ niche: input.niche, city: input.city, state: input.state, targetCount: input.targetCount * 2 });
-      rawCandidates = o.candidates; attribution = o.attribution ?? attribution;
-    }
-  } else {
-    const o = await osm.search({ niche: input.niche, city: input.city, state: input.state, targetCount: input.targetCount * 2 });
-    rawCandidates = o.candidates; attribution = o.attribution ?? '';
+  const foursquare = new FoursquareAdapter({ enabled: cfg.foursquare.enabled && !cfg.sampleMode, apiKey: cfg.foursquare.apiKey, baseUrl: cfg.foursquare.baseUrl });
+  const sources: DiscoveryProvider[] = [];
+  if (places.isEnabled()) sources.push(places);
+  if (foursquare.isEnabled()) sources.push(foursquare);
+  sources.push(osm);   // free, always (sample adapter in sample mode)
+
+  const want = input.targetCount * 2;
+  const rawCandidates: LeadCandidate[] = [];
+  const attributions = new Set<string>();
+  for (const src of sources) {
+    if (rawCandidates.length >= want) break;
+    try {
+      const r = await src.search({ niche: input.niche, city: input.city, state: input.state, targetCount: want });
+      rawCandidates.push(...r.candidates);
+      if (r.attribution) attributions.add(r.attribution);
+      const costCents = (r as { costCents?: number }).costCents ?? 0;
+      if (costCents > 0) {
+        await db.insert(schema.costEvents).values({
+          orgId: input.orgId, provider: src.name, sku: 'discovery_search', unitCount: 1, costCents,
+        }).catch(() => undefined);
+      }
+    } catch { /* one source failing shouldn't abort discovery */ }
   }
+  const attribution = [...attributions].join(' ');
 
   /* Build dedupe index from existing leads. */
   const idx = makeIndex();

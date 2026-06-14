@@ -1,6 +1,7 @@
 export * from './types.js';
 export * from './osm.js';
 export * from './places.js';
+export * from './foursquare.js';
 export * from './yelp.js';
 export * from './noaa.js';
 export * from './census.js';

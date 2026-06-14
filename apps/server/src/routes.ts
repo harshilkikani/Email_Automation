@@ -14,7 +14,7 @@ import {
 import { classifyPhone } from '@keres/providers';
 import { getConfig } from './config.js';
 import { runDiscovery } from './services/discovery.js';
-import { quickScrape, quickStatus } from './services/quick.js';
+import { quickScrape, quickFromLicenses, quickStatus } from './services/quick.js';
 import {
   createCampaign, buildRecipients, renderPreview,
 } from './services/campaigns.js';
@@ -333,6 +333,18 @@ export function registerRoutes(app: FastifyInstance) {
       return { ok: false, error: 'discovery_failed', detail: e?.message ?? String(e) };
     }
     await writeAudit('quick_scrape', r.campaignId, { niche: b.niche, city: b.city, state: b.state, found: r.found, withEmail: r.withEmail }, req);
+    return { ok: true, ...r };
+  });
+
+  /* Scrape & Send from imported state-license lists (free niche data). */
+  app.post('/api/quick/from-licenses', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niche?: string; state?: string; count?: number };
+    if (!b.niche || !b.state) return { ok: false, error: 'missing_fields' };
+    const r = await quickFromLicenses(getDb(), {
+      orgId, niche: b.niche as 'Septic', city: '', state: b.state, count: b.count ?? 25,
+    });
+    await writeAudit('quick_from_licenses', r.campaignId, { niche: b.niche, state: b.state, inserted: r.inserted, needsFinder: r.needsFinder }, req);
     return { ok: true, ...r };
   });
 

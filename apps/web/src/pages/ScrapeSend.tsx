@@ -13,6 +13,7 @@ interface Status { status: string | null; total: number; sent: number; failed: n
 
 export default function ScrapeSend() {
   const t = useToast();
+  const [source, setSource] = useState<'online' | 'licenses'>('online');
   const [niche, setNiche] = useState('Septic');
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
@@ -27,11 +28,14 @@ export default function ScrapeSend() {
   useEffect(() => () => { if (poll.current) window.clearInterval(poll.current); }, []);
 
   const scrape = async () => {
-    if (!city || !state) { t.push('warn', 'Enter a city and state'); return; }
+    if (!state || (source === 'online' && !city)) { t.push('warn', source === 'online' ? 'Enter a city and state' : 'Enter a state'); return; }
     setBusy(true); setGate(null);
-    const r = await api.post<ScrapeResult>('/quick/scrape', { niche, city, state, count });
+    const r = source === 'licenses'
+      ? await api.post<ScrapeResult & { needsFinder?: boolean }>('/quick/from-licenses', { niche, state, count })
+      : await api.post<ScrapeResult>('/quick/scrape', { niche, city, state, count });
     setBusy(false);
     if (!r.ok || !r.data) { t.push('error', r.error === 'discovery_failed' ? 'Discovery failed — try another city/trade' : 'Scrape failed', r.error); return; }
+    if ((r.data as any).needsFinder) { t.push('warn', 'Enable Google Places (or Foursquare) so we can find websites for your license list'); }
     setRes(r.data); setPhase('review');
     t.push('success', `${r.data.found} found · ${r.data.withEmail} with email · ${r.data.verified} verified`);
   };
@@ -70,12 +74,19 @@ export default function ScrapeSend() {
         <div className="panel">
           <div className="panel-head"><h2>1 · Who to reach</h2></div>
           <div className="field-row">
+            <div className="field"><label className="field-label">Source</label>
+              <select className="field-input" value={source} onChange={e => setSource(e.target.value as 'online' | 'licenses')} disabled={phase !== 'form'}>
+                <option value="online">Find online (Places / web)</option>
+                <option value="licenses">My licensed-contractor list</option>
+              </select></div>
             <div className="field"><label className="field-label">Trade</label>
               <select className="field-input" value={niche} onChange={e => setNiche(e.target.value)} disabled={phase !== 'form'}>
                 {NICHES.map(n => <option key={n} value={n}>{n}</option>)}
               </select></div>
-            <div className="field"><label className="field-label">City</label>
-              <input className="field-input" value={city} onChange={e => setCity(e.target.value)} placeholder="Austin" disabled={phase !== 'form'} /></div>
+            {source === 'online' && (
+              <div className="field"><label className="field-label">City</label>
+                <input className="field-input" value={city} onChange={e => setCity(e.target.value)} placeholder="Austin" disabled={phase !== 'form'} /></div>
+            )}
             <div className="field"><label className="field-label">State</label>
               <input className="field-input" value={state} onChange={e => setState(e.target.value)} placeholder="TX" maxLength={2} disabled={phase !== 'form'} /></div>
             <div className="field"><label className="field-label">How many</label>

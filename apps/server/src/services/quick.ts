@@ -12,6 +12,7 @@ import { runDiscovery } from './discovery.js';
 import { personalizeLead } from './personalization.js';
 import { createCampaign, buildRecipients, renderPreview } from './campaigns.js';
 import { isSendableStatus } from './verify.js';
+import { promoteLicensees } from './licensees.js';
 
 export interface QuickScrapeInput {
   orgId: string;
@@ -39,31 +40,42 @@ export async function quickScrape(db: Database, input: QuickScrapeInput): Promis
     state: input.state, targetCount: Math.max(1, Math.min(input.count, 100)),
   });
 
-  /* 2. Fact-grounded opener per new lead (deterministic; no Ollama needed). */
-  for (const id of disc.leadIds) {
+  return stageAndReview(db, input.orgId, input.niche, `${input.city}, ${input.state.toUpperCase()}`, disc.leadIds, disc.found, disc.inserted);
+}
+
+/** Scrape & Send variant sourced from imported state-license lists (free niche data). */
+export async function quickFromLicenses(db: Database, input: QuickScrapeInput): Promise<QuickScrapeResult & { needsFinder?: boolean }> {
+  const r = await promoteLicensees(db, { orgId: input.orgId, niche: input.niche, state: input.state, count: input.count });
+  const res = await stageAndReview(db, input.orgId, input.niche, `${input.niche} licensees — ${input.state.toUpperCase()}`, r.leadIds, r.considered, r.inserted);
+  return { ...res, withEmail: r.websitesFound, needsFinder: r.needsFinder };
+}
+
+/** Shared: personalize the batch, stage a campaign, and build the review payload. */
+async function stageAndReview(
+  db: Database, orgId: string, niche: Niche, label: string,
+  leadIds: string[], found: number, inserted: number,
+): Promise<QuickScrapeResult> {
+  for (const id of leadIds) {
     try { await personalizeLead(db, id); } catch { /* best-effort */ }
   }
 
-  /* 3. Stage a campaign targeting exactly this scraped batch. */
-  const tpl = defaultTemplateFor(input.niche);
-  const today = new Date().toISOString().slice(0, 10);
+  const tpl = defaultTemplateFor(niche);
   const { id: campaignId } = await createCampaign(db, {
-    orgId: input.orgId,
-    name: `${input.niche} — ${input.city}, ${input.state.toUpperCase()} (${today})`,
+    orgId,
+    name: `${niche} — ${label} (${new Date().toISOString().slice(0, 10)})`,
     templateKey: tpl.key,
     subjectA: tpl.subjectVariants[0] ?? 'Quick question, {{business}}',
-    audienceFilter: { leadIds: disc.leadIds },
+    audienceFilter: { leadIds },
   });
-  const recipientCount = disc.leadIds.length ? await buildRecipients(db, campaignId) : 0;
+  const recipientCount = leadIds.length ? await buildRecipients(db, campaignId) : 0;
 
-  /* 4. Build the review list (+ a rendered sample of the first sendable one). */
-  const leads = disc.leadIds.length
+  const leads = leadIds.length
     ? await db.select({ id: schema.leads.id, name: schema.leads.name, city: schema.leads.city, email: schema.leads.email, ev: schema.leads.emailVerificationStatus })
-        .from(schema.leads).where(inArray(schema.leads.id, disc.leadIds))
+        .from(schema.leads).where(inArray(schema.leads.id, leadIds))
     : [];
-  const openerRows = disc.leadIds.length
+  const openerRows = leadIds.length
     ? await db.select({ leadId: schema.leadSignals.leadId, opener: schema.leadSignals.personalizedOpener })
-        .from(schema.leadSignals).where(inArray(schema.leadSignals.leadId, disc.leadIds))
+        .from(schema.leadSignals).where(inArray(schema.leadSignals.leadId, leadIds))
     : [];
   const openerById = new Map(openerRows.map(r => [r.leadId, r.opener]));
 
@@ -80,14 +92,10 @@ export async function quickScrape(db: Database, input: QuickScrapeInput): Promis
   }
 
   return {
-    campaignId,
-    found: disc.found,
-    inserted: disc.inserted,
+    campaignId, found, inserted,
     withEmail: withEmail.length,
     verified: recipients.filter(r => r.verified).length,
-    recipientCount,
-    recipients,
-    sample,
+    recipientCount, recipients, sample,
   };
 }
 
