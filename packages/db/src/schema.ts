@@ -120,6 +120,9 @@ export const leads = pgTable('leads', {
   emailVerificationStatus: text('email_verification_status'),    // valid|catch_all|invalid|unverifiable_provider|skipped|unknown
   emailVerificationSource: text('email_verification_source'),    // syntax|mx|smtp|bouncer|hunter|disposable|skipped
   emailVerificationCostCents: integer('email_verification_cost_cents').notNull().default(0),
+  /* Owner / decision-maker found from the site (for greeting + targeting). */
+  ownerName: text('owner_name'),
+  emailSource: text('email_source'),                             // direct_owner|pattern|generic
   disqualified: boolean('disqualified').notNull().default(false),
   disqualificationReason: text('disqualification_reason'),
   notes: jsonb('notes').notNull().default(sql`'[]'::jsonb`),

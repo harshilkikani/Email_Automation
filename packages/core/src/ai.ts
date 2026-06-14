@@ -416,6 +416,7 @@ Respond ONLY with JSON:
 
 Business: ${input.business}
 City: ${input.city || '(unknown)'}
+${input.ownerFirst ? `Owner first name (greet them): ${input.ownerFirst}` : ''}
 What we sell: ${input.product}
 
 VERIFIED facts about this business (use ONLY these — never invent or assume anything else):

@@ -4,7 +4,7 @@ import { useToast } from '../toast';
 
 const NICHES = ['Septic', 'Water/Mold', 'HVAC', 'Roofer', 'Plumber', 'Electrician', 'Towing', 'Real Estate'];
 
-interface Recipient { name: string; city: string | null; email: string | null; opener: string | null; verified: boolean }
+interface Recipient { name: string; city: string | null; email: string | null; owner: string | null; opener: string | null; verified: boolean }
 interface ScrapeResult {
   campaignId: string; found: number; inserted: number; withEmail: number; verified: number; recipientCount: number;
   recipients: Recipient[]; sample: { subject: string; body: string } | null;
@@ -126,11 +126,12 @@ export default function ScrapeSend() {
 
             {res.recipients.length > 0 ? (
               <table className="data-table" style={{ width: '100%', fontSize: 13 }}>
-                <thead><tr><th style={{ textAlign: 'left' }}>Business</th><th style={{ textAlign: 'left' }}>Email</th><th style={{ textAlign: 'left' }}>Verified</th><th style={{ textAlign: 'left' }}>Opener</th></tr></thead>
+                <thead><tr><th style={{ textAlign: 'left' }}>Business</th><th style={{ textAlign: 'left' }}>Owner</th><th style={{ textAlign: 'left' }}>Email</th><th style={{ textAlign: 'left' }}>Verified</th><th style={{ textAlign: 'left' }}>Opener</th></tr></thead>
                 <tbody>
                   {res.recipients.map((r, i) => (
                     <tr key={i} style={{ opacity: r.verified ? 1 : 0.5 }}>
                       <td>{r.name}<div style={{ color: 'var(--fg-3)' }}>{r.city}</div></td>
+                      <td>{r.owner ?? '—'}</td>
                       <td>{r.email}</td>
                       <td style={{ color: r.verified ? 'var(--accent)' : 'var(--fg-3)' }}>{r.verified ? '✓ verified' : 'skipped'}</td>
                       <td style={{ color: 'var(--fg-3)' }}>{r.opener ?? '—'}</td>

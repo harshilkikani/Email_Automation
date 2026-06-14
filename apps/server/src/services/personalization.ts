@@ -53,17 +53,18 @@ export async function personalizeLead(db: Database, leadId: string): Promise<str
 
   const adapter = getAiAdapter();
   let opener: string | null = null;
+  const ownerFirst = lead.ownerName?.trim().split(/\s+/)[0] ?? null;
   let model = adapter.name;
   try {
     opener = await adapter.personalizeOpener({
       business: lead.name, city: lead.city ?? '',
-      niche: lead.niche as Niche, deficiencies, product: PRODUCT,
+      niche: lead.niche as Niche, deficiencies, product: PRODUCT, ownerFirst,
     });
   } catch (e) {
     obs().captureException(e, { leadId, op: 'personalize_opener' });
   }
   if (!opener) {
-    opener = deterministicOpener(lead.name, lead.city ?? '', deficiencies);
+    opener = deterministicOpener(lead.name, lead.city ?? '', deficiencies, ownerFirst);
     model = 'deterministic';
   }
   if (!opener) return null;

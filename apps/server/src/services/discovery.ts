@@ -16,6 +16,7 @@ import {
   YelpAdapter, Scraper, classifyPhone, LicenseRegistry,
 } from '@keres/providers';
 import { getVerifier } from './verify.js';
+import { findOwnerEmail } from './owner-finder.js';
 import { getConfig } from '../config.js';
 import { lookupLicense } from './license-importer.js';
 
@@ -106,19 +107,28 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
     const probe = scraper.isEnabled()
       ? await scraper.probe(cand.website ?? '')
       : { webPresenceLevel: cand.website ? 'basic' : 'none', emails: [], hasOnlineBooking: false, deadDomain: false, evidence: { sample: true } } as { webPresenceLevel: WebPresenceLevel; emails: string[]; hasOnlineBooking: boolean; deadDomain: boolean; evidence: Record<string, unknown> };
-    if (probe.emails.length > 0 && !cand.email) cand.email = probe.emails[0] ?? null;
-
-    /* Free MX/syntax/disposable verification of the scraped email. Only verified
-       emails become sendable; the rest are kept as leads but never emailed. */
+    /* Owner / decision-maker + best-email finder (Apollo/Hunter-style): deep-crawl
+       the site, find the owner's name, detect the email pattern, choose the best
+       address, and MX-verify it. Falls back to the first scraped email. */
+    let ownerName: string | null = null;
+    let emailKind: string | null = null;
     let emailStatus: string | null = null;
     let emailSource: string | null = null;
-    if (cand.email) {
-      try {
-        const v = await verifier.verify(cand.email);
-        emailStatus = v.status; emailSource = v.source;
-      } catch {
-        emailStatus = 'unknown'; emailSource = 'skipped';
-      }
+    if (cand.website) {
+      const owner = await findOwnerEmail(scraper, cand.website, probe.emails);
+      if (owner.email) cand.email = owner.email;
+      else if (probe.emails[0] && !cand.email) cand.email = probe.emails[0];
+      ownerName = owner.ownerName;
+      emailKind = owner.emailSource;
+      emailStatus = owner.verifyStatus;
+      emailSource = owner.verifySource;
+    } else if (probe.emails[0] && !cand.email) {
+      cand.email = probe.emails[0];
+    }
+    /* Verify if the finder didn't (e.g., no website crawl). */
+    if (cand.email && !emailStatus) {
+      try { const v = await verifier.verify(cand.email); emailStatus = v.status; emailSource = v.source; }
+      catch { emailStatus = 'unknown'; emailSource = 'skipped'; }
     }
 
     /* Prefer DB-backed lookup against `state_licensees` (populated via CSV
@@ -184,6 +194,8 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
       niche: cand.niche,
       source: cand.source,
       sourceExternalId: cand.sourceExternalId ?? null,
+      ownerName,
+      emailSource: emailKind,
       emailVerificationStatus: emailStatus,
       emailVerificationSource: emailSource,
       status: 'new',

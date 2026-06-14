@@ -33,7 +33,7 @@ export interface QuickScrapeResult {
   withEmail: number;      // of those, how many had a scrapeable email
   verified: number;       // of those, how many passed MX/syntax verification (= sendable)
   recipientCount: number; // recipients staged on the campaign
-  recipients: Array<{ name: string; city: string | null; email: string | null; opener: string | null; verified: boolean }>;
+  recipients: Array<{ name: string; city: string | null; email: string | null; owner: string | null; opener: string | null; verified: boolean }>;
   sample: Awaited<ReturnType<typeof renderPreview>> | null;
 }
 
@@ -77,7 +77,7 @@ async function stageAndReview(
   const recipientCount = leadIds.length ? await buildRecipients(db, campaignId) : 0;
 
   const leads = leadIds.length
-    ? await db.select({ id: schema.leads.id, name: schema.leads.name, city: schema.leads.city, email: schema.leads.email, ev: schema.leads.emailVerificationStatus })
+    ? await db.select({ id: schema.leads.id, name: schema.leads.name, city: schema.leads.city, email: schema.leads.email, owner: schema.leads.ownerName, ev: schema.leads.emailVerificationStatus })
         .from(schema.leads).where(inArray(schema.leads.id, leadIds))
     : [];
   const openerRows = leadIds.length
@@ -88,8 +88,8 @@ async function stageAndReview(
 
   const withEmail = leads.filter(l => l.email);
   const recipients = withEmail.map(l => ({
-    name: l.name, city: l.city, email: l.email, opener: openerById.get(l.id) ?? null,
-    verified: isSendableStatus(l.ev),
+    name: l.name, city: l.city, email: l.email, owner: l.owner ?? null,
+    opener: openerById.get(l.id) ?? null, verified: isSendableStatus(l.ev),
   }));
   const firstSendable = withEmail.find(l => isSendableStatus(l.ev)) ?? withEmail[0];
 

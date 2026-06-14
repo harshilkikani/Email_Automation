@@ -68,6 +68,40 @@ export class Scraper {
     }
   }
 
+  /** People-pages most likely to name the owner/decision-maker. */
+  static readonly PEOPLE_PATHS = ['/about', '/about-us', '/team', '/our-team', '/meet-the-team', '/staff', '/contact'];
+
+  /**
+   * Bounded multi-page crawl for owner/email finding: fetches up to `maxPages` of
+   * the given paths, returning all emails + concatenated visible text. Plain HTML
+   * only (no JS). Best-effort — failures per page are skipped.
+   */
+  async deepCrawl(website: string | null | undefined, paths: string[] = Scraper.PEOPLE_PATHS, maxPages = 4): Promise<{ emails: string[]; text: string; pages: number }> {
+    if (!website || !this.isEnabled()) return { emails: [], text: '', pages: 0 };
+    const fetcher = this.cfg.fetcher ?? this.realFetch.bind(this);
+    let base = normalizeUrl(website);
+    const emails = new Set<string>();
+    let text = '';
+    let pages = 0;
+    /* Home first (resolves the final URL), then the people pages. */
+    for (const path of ['', ...paths]) {
+      if (pages >= maxPages) break;
+      try {
+        const target = path === '' ? base : new URL(path, base).toString();
+        const res = await fetcher(target);
+        if (res.status >= 200 && res.status < 400) {
+          if (path === '') base = res.finalUrl || base;
+          const $ = cheerio.load(res.html);
+          for (const e of collectEmails($, res.html)) emails.add(e);
+          $('script, style, noscript').remove();
+          text += ' ' + $('body').text().replace(/\s+/g, ' ');
+          pages++;
+        }
+      } catch { /* skip this page */ }
+    }
+    return { emails: [...emails], text: text.slice(0, 200_000), pages };
+  }
+
   private async realFetch(url: string): Promise<{ status: number; html: string; finalUrl: string }> {
     const res = await request(url, {
       method: 'GET',

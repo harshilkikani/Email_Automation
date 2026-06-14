@@ -146,11 +146,12 @@ export function deriveDeficiencies(intel: IntelFacts, signals: SignalFacts, nowY
  * Deterministic, no-LLM fallback opener built straight from the top deficiency.
  * Used when AI personalization is off or returns nothing — still specific and true.
  */
-export function deterministicOpener(business: string, city: string, deficiencies: Deficiency[]): string | null {
+export function deterministicOpener(business: string, city: string, deficiencies: Deficiency[], ownerFirst?: string | null): string | null {
   const top = deficiencies[0];
   if (!top) return null;
   const where = city ? ` in ${city}` : '';
-  return `Saw ${business}${where} — looks like it ${top.fact}.`;
+  const greeting = ownerFirst && ownerFirst.trim() ? `Hi ${ownerFirst.trim()} — ` : '';
+  return `${greeting}saw ${business}${where} — looks like it ${top.fact}.`.replace(/^([a-z])/, (m) => greeting ? m : m.toUpperCase());
 }
 
 export interface PersonalizeOpenerInput {
@@ -160,4 +161,6 @@ export interface PersonalizeOpenerInput {
   deficiencies: Deficiency[];
   /** What we sell, e.g. "a 24/7 AI receptionist that answers calls and books jobs". */
   product: string;
+  /** Owner/decision-maker first name, when found, to greet by name. */
+  ownerFirst?: string | null;
 }
