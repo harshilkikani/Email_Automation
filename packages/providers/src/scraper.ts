@@ -79,26 +79,31 @@ export class Scraper {
   async deepCrawl(website: string | null | undefined, paths: string[] = Scraper.PEOPLE_PATHS, maxPages = 4): Promise<{ emails: string[]; text: string; pages: number }> {
     if (!website || !this.isEnabled()) return { emails: [], text: '', pages: 0 };
     const fetcher = this.cfg.fetcher ?? this.realFetch.bind(this);
-    let base = normalizeUrl(website);
     const emails = new Set<string>();
     let text = '';
     let pages = 0;
-    /* Home first (resolves the final URL), then the people pages. */
-    for (const path of ['', ...paths]) {
-      if (pages >= maxPages) break;
-      try {
-        const target = path === '' ? base : new URL(path, base).toString();
-        const res = await fetcher(target);
-        if (res.status >= 200 && res.status < 400) {
-          if (path === '') base = res.finalUrl || base;
-          const $ = cheerio.load(res.html);
-          for (const e of collectEmails($, res.html)) emails.add(e);
-          $('script, style, noscript').remove();
-          text += ' ' + $('body').text().replace(/\s+/g, ' ');
-          pages++;
-        }
-      } catch { /* skip this page */ }
-    }
+    const absorb = (html: string) => {
+      const $ = cheerio.load(html);
+      for (const e of collectEmails($, html)) emails.add(e);
+      $('script, style, noscript').remove();
+      text += ' ' + $('body').text().replace(/\s+/g, ' ');
+      pages++;
+    };
+    /* Home first (resolves the final URL), then the people pages IN PARALLEL so a
+       slow page doesn't serialize the whole crawl. */
+    let base = normalizeUrl(website);
+    try {
+      const home = await fetcher(base);
+      if (home.status >= 200 && home.status < 400) { base = home.finalUrl || base; absorb(home.html); }
+    } catch { /* no home → nothing to crawl */ return { emails: [], text: '', pages: 0 }; }
+
+    const wanted = paths.slice(0, Math.max(0, maxPages - 1));
+    const results = await Promise.allSettled(wanted.map(async p => {
+      const res = await fetcher(new URL(p, base).toString());
+      return res.status >= 200 && res.status < 400 ? res.html : null;
+    }));
+    for (const r of results) if (r.status === 'fulfilled' && r.value) absorb(r.value);
+
     return { emails: [...emails], text: text.slice(0, 200_000), pages };
   }
 

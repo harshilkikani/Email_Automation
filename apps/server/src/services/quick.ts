@@ -6,11 +6,11 @@
  */
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
-import { inArray, sql } from 'drizzle-orm';
+import { and, inArray, isNull, sql } from 'drizzle-orm';
 import { defaultTemplateFor, type Niche } from '@keres/core';
 import { runDiscovery } from './discovery.js';
 import { personalizeLead } from './personalization.js';
-import { createCampaign, buildRecipients, renderPreview } from './campaigns.js';
+import { createCampaign, buildRecipients, renderPreview, resolveAudience, type AudienceFilter } from './campaigns.js';
 import { isSendableStatus } from './verify.js';
 import { promoteLicensees } from './licensees.js';
 
@@ -44,23 +44,35 @@ export async function quickScrape(db: Database, input: QuickScrapeInput): Promis
     state: input.state, targetCount: Math.max(1, Math.min(input.count, 100)),
   });
 
-  return stageAndReview(db, input, `${input.city}, ${input.state.toUpperCase()}`, disc.leadIds, disc.found, disc.inserted);
+  /* Target every matching UNCONTACTED lead (new + already-saved), so a re-scrape
+     of the same trade/city still surfaces leads instead of 0 after dedupe. */
+  return stageAndReview(db, input, `${input.city}, ${input.state.toUpperCase()}`,
+    { niche: input.niche, city: input.city, state: input.state, status: 'uncontacted' }, disc.found, disc.inserted);
 }
 
 /** Scrape & Send variant sourced from imported state-license lists (free niche data). */
 export async function quickFromLicenses(db: Database, input: QuickScrapeInput): Promise<QuickScrapeResult & { needsFinder?: boolean }> {
   const r = await promoteLicensees(db, { orgId: input.orgId, niche: input.niche, state: input.state, count: input.count });
-  const res = await stageAndReview(db, input, `${input.niche} licensees — ${input.state.toUpperCase()}`, r.leadIds, r.considered, r.inserted);
+  const res = await stageAndReview(db, input, `${input.niche} licensees — ${input.state.toUpperCase()}`, { leadIds: r.leadIds }, r.considered, r.inserted);
   return { ...res, withEmail: r.websitesFound, needsFinder: r.needsFinder };
 }
 
-/** Shared: personalize the batch, stage a campaign (with sequence), build the review payload. */
+/** Shared: resolve the audience, personalize it, stage a campaign, build review. */
 async function stageAndReview(
   db: Database, input: QuickScrapeInput, label: string,
-  leadIds: string[], found: number, inserted: number,
+  audienceFilter: AudienceFilter, found: number, inserted: number,
 ): Promise<QuickScrapeResult> {
   const { orgId, niche } = input;
-  for (const id of leadIds) {
+  /* Resolve the audience (already excludes no-email / unverified / suppressed). */
+  const { leadIds } = await resolveAudience(db, orgId, audienceFilter);
+
+  /* Personalize any audience lead that doesn't have an opener yet. */
+  const need = leadIds.length
+    ? await db.select({ id: schema.leadSignals.leadId })
+        .from(schema.leadSignals)
+        .where(and(inArray(schema.leadSignals.leadId, leadIds), isNull(schema.leadSignals.personalizedOpener)))
+    : [];
+  for (const { id } of need) {
     try { await personalizeLead(db, id); } catch { /* best-effort */ }
   }
 
@@ -70,7 +82,7 @@ async function stageAndReview(
     name: `${niche} — ${label} (${new Date().toISOString().slice(0, 10)})`,
     templateKey: tpl.key,
     subjectA: tpl.subjectVariants[0] ?? 'Quick question, {{business}}',
-    audienceFilter: { leadIds },
+    audienceFilter,
     sequenceSteps: 1 + Math.max(0, input.followups ?? 0),
     stepDelayDays: input.stepDelayDays ?? 3,
   });
