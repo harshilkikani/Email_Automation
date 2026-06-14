@@ -52,7 +52,7 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
      the always-on free fallback. Cross-source + DB dedupe happens in the main
      loop below via the dedupe index. */
   const places = new PlacesAdapter({ enabled: cfg.places.enabled && !cfg.sampleMode, apiKey: cfg.places.apiKey });
-  const foursquare = new FoursquareAdapter({ enabled: cfg.foursquare.enabled && !cfg.sampleMode, apiKey: cfg.foursquare.apiKey, baseUrl: cfg.foursquare.baseUrl });
+  const foursquare = new FoursquareAdapter({ enabled: cfg.foursquare.enabled && !cfg.sampleMode, apiKey: cfg.foursquare.apiKey, baseUrl: cfg.foursquare.baseUrl, apiVersion: cfg.foursquare.apiVersion });
   const sources: DiscoveryProvider[] = [];
   if (places.isEnabled()) sources.push(places);
   if (foursquare.isEnabled()) sources.push(foursquare);

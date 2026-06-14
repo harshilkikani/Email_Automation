@@ -111,7 +111,7 @@ export interface KeresConfig {
 
   yelp: { enabled: boolean; apiKey: string; monthlyBudgetUsd: number };
   places: { enabled: boolean; apiKey: string; monthlyBudgetUsd: number };
-  foursquare: { enabled: boolean; apiKey: string; baseUrl: string };
+  foursquare: { enabled: boolean; apiKey: string; baseUrl: string; apiVersion: string };
   hunter: { enabled: boolean; apiKey: string; monthlyFreeCredits: number };
   bouncer: { enabled: boolean; apiKey: string; monthlyBudgetCents: number };
 
@@ -285,7 +285,7 @@ export function getConfig(): Readonly<KeresConfig> {
 
     yelp:    { enabled: bool('ENABLE_YELP', false),    apiKey: str('YELP_API_KEY'),    monthlyBudgetUsd: num('YELP_MONTHLY_BUDGET_USD', 0) },
     places:  { enabled: bool('ENABLE_PLACES', false),  apiKey: str('PLACES_API_KEY'),  monthlyBudgetUsd: num('PLACES_MONTHLY_BUDGET_USD', 0) },
-    foursquare: { enabled: bool('ENABLE_FOURSQUARE', false), apiKey: str('FOURSQUARE_API_KEY'), baseUrl: str('FOURSQUARE_BASE_URL', 'https://api.foursquare.com/v3/places/search') },
+    foursquare: { enabled: bool('ENABLE_FOURSQUARE', false), apiKey: str('FOURSQUARE_API_KEY'), baseUrl: str('FOURSQUARE_BASE_URL', 'https://places-api.foursquare.com/places/search'), apiVersion: str('FOURSQUARE_API_VERSION', '2025-06-17') },
     hunter:  { enabled: bool('ENABLE_HUNTER', false),  apiKey: str('HUNTER_API_KEY'),  monthlyFreeCredits: num('HUNTER_MONTHLY_FREE_CREDITS', 50) },
     bouncer: { enabled: bool('ENABLE_BOUNCER', false), apiKey: str('BOUNCER_API_KEY'), monthlyBudgetCents: num('BOUNCER_MONTHLY_BUDGET_USD', 5) * 100 },
 

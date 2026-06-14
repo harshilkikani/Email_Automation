@@ -14,13 +14,16 @@ import type { DiscoveryProvider, DiscoveryQuery, DiscoveryResult } from './types
 export interface FoursquareConfig {
   enabled: boolean;
   apiKey: string;
-  /** Override base URL if Foursquare moves it (default v3). */
+  /** New Places API base (default). */
   baseUrl?: string;
+  /** X-Places-Api-Version date the new API requires. */
+  apiVersion?: string;
   /** Test seam. */
   fetcher?: (url: string) => Promise<FoursquareResponse>;
 }
 
 interface FsqPlace {
+  fsq_place_id?: string;
   fsq_id?: string;
   name?: string;
   website?: string;
@@ -36,12 +39,12 @@ export class FoursquareAdapter implements DiscoveryProvider {
 
   async search(q: DiscoveryQuery): Promise<DiscoveryResult & { costCents: number }> {
     if (!this.isEnabled()) return { candidates: [], source: 'foursquare', attribution: '', costCents: 0 };
-    const base = this.cfg.baseUrl ?? 'https://api.foursquare.com/v3/places/search';
+    const base = this.cfg.baseUrl ?? 'https://places-api.foursquare.com/places/search';
     const params = new URLSearchParams({
       query: nicheToQuery(q.niche),
       near: `${q.city}, ${q.state}`,
       limit: String(Math.min(Math.max(q.targetCount, 1), 50)),
-      fields: 'fsq_id,name,website,tel,location',
+      fields: 'fsq_place_id,name,website,tel,location',
     });
     const fetcher = this.cfg.fetcher ?? this.realFetch.bind(this);
     let resp: FoursquareResponse;
@@ -65,7 +68,7 @@ export class FoursquareAdapter implements DiscoveryProvider {
         postalCode: p.location?.postcode ?? null,
         niche: q.niche,
         source: 'foursquare',
-        sourceExternalId: p.fsq_id ?? null,
+        sourceExternalId: p.fsq_place_id ?? p.fsq_id ?? null,
       });
     }
     return {
@@ -78,7 +81,11 @@ export class FoursquareAdapter implements DiscoveryProvider {
 
   private async realFetch(url: string): Promise<FoursquareResponse> {
     const res = await fetch(url, {
-      headers: { Authorization: this.cfg.apiKey, Accept: 'application/json' },
+      headers: {
+        Authorization: `Bearer ${this.cfg.apiKey}`,
+        'X-Places-Api-Version': this.cfg.apiVersion ?? '2025-06-17',
+        Accept: 'application/json',
+      },
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) throw new Error(`Foursquare ${res.status}`);

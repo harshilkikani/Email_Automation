@@ -23,7 +23,7 @@ export interface PromoteLicenseesResult {
 export async function promoteLicensees(db: Database, input: PromoteLicenseesInput): Promise<PromoteLicenseesResult> {
   const cfg = getConfig();
   const places = new PlacesAdapter({ enabled: cfg.places.enabled && !cfg.sampleMode, apiKey: cfg.places.apiKey });
-  const fsq = new FoursquareAdapter({ enabled: cfg.foursquare.enabled && !cfg.sampleMode, apiKey: cfg.foursquare.apiKey, baseUrl: cfg.foursquare.baseUrl });
+  const fsq = new FoursquareAdapter({ enabled: cfg.foursquare.enabled && !cfg.sampleMode, apiKey: cfg.foursquare.apiKey, baseUrl: cfg.foursquare.baseUrl, apiVersion: cfg.foursquare.apiVersion });
   const finder: DiscoveryProvider | null = places.isEnabled() ? places : fsq.isEnabled() ? fsq : null;
   if (!finder) return { leadIds: [], considered: 0, websitesFound: 0, inserted: 0, needsFinder: true };
 
