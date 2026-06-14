@@ -320,12 +320,13 @@ export function registerRoutes(app: FastifyInstance) {
   /* ────────────── Quick: Scrape & Send ────────────── */
   app.post('/api/quick/scrape', async (req) => {
     const orgId = await singleOrgId();
-    const b = (req.body ?? {}) as { niche?: string; city?: string; state?: string; count?: number };
+    const b = (req.body ?? {}) as { niche?: string; city?: string; state?: string; count?: number; followups?: number; stepDelayDays?: number };
     if (!b.niche || !b.city || !b.state) return { ok: false, error: 'missing_fields' };
     let r;
     try {
       r = await quickScrape(getDb(), {
         orgId, niche: b.niche as 'Septic', city: b.city, state: b.state, count: b.count ?? 25,
+        followups: b.followups, stepDelayDays: b.stepDelayDays,
       });
     } catch (e: any) {
       /* Discovery source (OSM/Overpass) can time out or be empty — surface a
@@ -339,10 +340,11 @@ export function registerRoutes(app: FastifyInstance) {
   /* Scrape & Send from imported state-license lists (free niche data). */
   app.post('/api/quick/from-licenses', async (req) => {
     const orgId = await singleOrgId();
-    const b = (req.body ?? {}) as { niche?: string; state?: string; count?: number };
+    const b = (req.body ?? {}) as { niche?: string; state?: string; count?: number; followups?: number; stepDelayDays?: number };
     if (!b.niche || !b.state) return { ok: false, error: 'missing_fields' };
     const r = await quickFromLicenses(getDb(), {
       orgId, niche: b.niche as 'Septic', city: '', state: b.state, count: b.count ?? 25,
+      followups: b.followups, stepDelayDays: b.stepDelayDays,
     });
     await writeAudit('quick_from_licenses', r.campaignId, { niche: b.niche, state: b.state, inserted: r.inserted, needsFinder: r.needsFinder }, req);
     return { ok: true, ...r };

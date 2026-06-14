@@ -246,6 +246,9 @@ export const campaigns = pgTable('campaigns', {
   subjectA: text('subject_a').notNull().default(''),
   subjectB: text('subject_b'),
   audienceFilter: jsonb('audience_filter').notNull().default(sql`'{}'::jsonb`),
+  /* Follow-up sequence: total touches (1 = single send) + days between touches. */
+  sequenceSteps: integer('sequence_steps').notNull().default(1),
+  stepDelayDays: integer('step_delay_days').notNull().default(3),
   recipientCount: integer('recipient_count').notNull().default(0),
   sentCount: integer('sent_count').notNull().default(0),
   deliveredCount: integer('delivered_count').notNull().default(0),
@@ -276,6 +279,9 @@ export const campaignRecipients = pgTable('campaign_recipients', {
   leadId: uuid('lead_id').notNull().references(() => leads.id, { onDelete: 'cascade' }),
   bucket: text('bucket'),                                    // top|mid|bottom|control|seedlist
   state: text('state').notNull().default('pending'),         // pending|queued|sent|delivered|bounced|complained|replied|skipped|failed
+  /** Which sequence touch this recipient is on (1 = first email). */
+  step: integer('step').notNull().default(1),
+  lastSentAt: timestamp('last_sent_at', { withTimezone: true }),
   nextSendAt: timestamp('next_send_at', { withTimezone: true }),
   renderedSubject: text('rendered_subject'),
   renderedBody: text('rendered_body'),

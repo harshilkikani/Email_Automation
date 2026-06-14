@@ -18,6 +18,7 @@ export default function ScrapeSend() {
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [count, setCount] = useState(25);
+  const [followups, setFollowups] = useState(2);
   const [phase, setPhase] = useState<'form' | 'review' | 'sending'>('form');
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<ScrapeResult | null>(null);
@@ -31,8 +32,8 @@ export default function ScrapeSend() {
     if (!state || (source === 'online' && !city)) { t.push('warn', source === 'online' ? 'Enter a city and state' : 'Enter a state'); return; }
     setBusy(true); setGate(null);
     const r = source === 'licenses'
-      ? await api.post<ScrapeResult & { needsFinder?: boolean }>('/quick/from-licenses', { niche, state, count })
-      : await api.post<ScrapeResult>('/quick/scrape', { niche, city, state, count });
+      ? await api.post<ScrapeResult & { needsFinder?: boolean }>('/quick/from-licenses', { niche, state, count, followups })
+      : await api.post<ScrapeResult>('/quick/scrape', { niche, city, state, count, followups });
     setBusy(false);
     if (!r.ok || !r.data) { t.push('error', r.error === 'discovery_failed' ? 'Discovery failed — try another city/trade' : 'Scrape failed', r.error); return; }
     if ((r.data as any).needsFinder) { t.push('warn', 'Enable Google Places (or Foursquare) so we can find websites for your license list'); }
@@ -91,6 +92,13 @@ export default function ScrapeSend() {
               <input className="field-input" value={state} onChange={e => setState(e.target.value)} placeholder="TX" maxLength={2} disabled={phase !== 'form'} /></div>
             <div className="field"><label className="field-label">How many</label>
               <input className="field-input" type="number" min={1} max={100} value={count} onChange={e => setCount(Number(e.target.value))} disabled={phase !== 'form'} /></div>
+            <div className="field"><label className="field-label">Follow-ups</label>
+              <select className="field-input" value={followups} onChange={e => setFollowups(Number(e.target.value))} disabled={phase !== 'form'}>
+                <option value={0}>None (1 email)</option>
+                <option value={1}>1 follow-up</option>
+                <option value={2}>2 follow-ups</option>
+                <option value={3}>3 follow-ups</option>
+              </select></div>
           </div>
           {phase === 'form'
             ? <button className="btn btn-primary" onClick={scrape} disabled={busy}>{busy ? <span className="spinner" /> : 'Scrape businesses'}</button>

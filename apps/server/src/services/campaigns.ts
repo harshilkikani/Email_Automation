@@ -22,6 +22,8 @@ export interface CampaignDraftInput {
   subjectA?: string;
   subjectB?: string;
   audienceFilter: AudienceFilter;
+  sequenceSteps?: number;
+  stepDelayDays?: number;
   senderDomainId?: string;
   validationExperimentId?: string;
 }
@@ -46,6 +48,8 @@ export async function createCampaign(db: Database, input: CampaignDraftInput): P
     subjectA: input.subjectA ?? '',
     subjectB: input.subjectB ?? null,
     audienceFilter: input.audienceFilter as unknown as Record<string, unknown>,
+    sequenceSteps: Math.max(1, Math.min(input.sequenceSteps ?? 1, 5)),
+    stepDelayDays: Math.max(1, Math.min(input.stepDelayDays ?? 3, 30)),
     senderDomainId: input.senderDomainId ?? null,
     validationExperimentId: input.validationExperimentId ?? null,
   }).returning({ id: schema.campaigns.id });

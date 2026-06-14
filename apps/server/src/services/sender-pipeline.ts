@@ -83,6 +83,7 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
     orgId: schema.campaignRecipients.orgId,
     retryCount: schema.campaignRecipients.retryCount,
     nextSendAt: schema.campaignRecipients.nextSendAt,
+    step: schema.campaignRecipients.step,
   })
     .from(schema.campaignRecipients)
     .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignRecipients.campaignId))
@@ -218,6 +219,7 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
       fromSignoff: org.name,
       subjectOverrides,
       opener: signals?.personalizedOpener ?? undefined,
+      step: r.step,
     });
     const msgId = `<${randomUUID()}@${cfg.org.outreachSubdomain}>`;
     const final = finalRender({
@@ -270,12 +272,25 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
         occurredAt: new Date(),
         rawPayload: { msgId, slot: rendered.slotKey } as Record<string, unknown>,
       }).onConflictDoNothing();
+      /* Sequence: if more touches remain, re-queue the next one after the delay;
+         otherwise this recipient is done. A reply/bounce/unsubscribe flips the
+         recipient to a terminal state elsewhere, which stops the sequence. */
+      const totalSteps = Math.max(1, camp.sequenceSteps ?? 1);
+      const now = new Date();
+      const hasMore = r.step < totalSteps;
+      const nextAt = hasMore
+        ? new Date(now.getTime() + Math.max(1, camp.stepDelayDays ?? 3) * 86400_000)
+        : null;
       await db.update(schema.campaignRecipients).set({
-        state: 'sent', providerMessageId: out.providerMessageId,
+        state: hasMore ? 'pending' : 'sent',
+        step: hasMore ? r.step + 1 : r.step,
+        nextSendAt: nextAt,
+        providerMessageId: out.providerMessageId,
         renderedSubject: final.subject, renderedBody: final.bodyWithFooter,
         variantSeed: rendered.variantSeed, slotKey: rendered.slotKey,
         senderMailboxId: picked?.id ?? null,
-        firstSentAt: new Date(),
+        firstSentAt: r.step === 1 ? now : undefined,
+        lastSentAt: now,
       }).where(eq(schema.campaignRecipients.id, r.rid));
       await db.update(schema.campaigns).set({ sentCount: sql`${schema.campaigns.sentCount} + 1` })
         .where(eq(schema.campaigns.id, camp.id));

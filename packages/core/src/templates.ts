@@ -21,7 +21,26 @@ export interface Template {
   openerVariants: Record<SlotKey, string[]>;
   painVariants: string[];
   bodyTemplate: string;
+  /** Follow-up bodies for touches 2,3,… When absent, DEFAULT_FOLLOWUPS is used. */
+  followups?: string[];
 }
+
+/** Short, niche-agnostic follow-up bumps (sent only if no reply). Personalized
+ *  with the business name + persona signoff; the CAN-SPAM footer is appended later. */
+export const DEFAULT_FOLLOWUPS: string[] = [
+  `Hey {{business}} — floating my note back to the top of your inbox in case it slipped by. Still glad to show how it works in ~10 minutes. Worth a quick look?
+
+{{from_name}}
+{{from_signoff}}`,
+  `Following up once more for {{business}}. If timing's off right now, no worries — want me to send a 2-minute example of what it'd look like for you?
+
+{{from_name}}
+{{from_signoff}}`,
+  `Closing the loop here. If you ever want to stop letting calls slip to voicemail, just reply and I'll set it up. All the best.
+
+{{from_name}}
+{{from_signoff}}`,
+];
 
 const COMMON_OPENERS: Record<SlotKey, string[]> = {
   no_website: [
@@ -273,6 +292,8 @@ export interface RenderContext {
    * slotKey is still recorded (from the signals) for analytics.
    */
   opener?: string;
+  /** Sequence touch number (1 = first email; 2+ selects a follow-up body). */
+  step?: number;
 }
 
 export interface RenderedEmail {
@@ -324,6 +345,7 @@ function pickByHash<T>(arr: T[], seed: bigint): T {
 export function renderEmail(template: Template, ctx: RenderContext): RenderedEmail {
   const seed = stableHash(ctx.leadId);
   const slotKey = pickSlot(ctx.signals);
+  const step = ctx.step && ctx.step > 1 ? ctx.step : 1;
   /* Prefer a pre-generated personalized opener; else pick the deterministic
      slot opener by stable hash. */
   const slotOpeners = template.openerVariants[slotKey] ?? template.openerVariants.default;
@@ -331,7 +353,12 @@ export function renderEmail(template: Template, ctx: RenderContext): RenderedEma
   const variants = ctx.subjectOverrides && ctx.subjectOverrides.length > 0
     ? ctx.subjectOverrides
     : template.subjectVariants;
-  const subject = pickByHash(variants, seed + 1n);
+  /* Follow-ups reply in-thread → "Re: <subject>"; touch 1 uses the plain subject. */
+  const baseSubject = pickByHash(variants, seed + 1n);
+  const subject = step > 1 ? `Re: ${baseSubject}` : baseSubject;
+  /* Body: touch 1 = main template; touch N>1 = the (N-1)th follow-up bump. */
+  const followups = template.followups && template.followups.length > 0 ? template.followups : DEFAULT_FOLLOWUPS;
+  const bodySource = step > 1 ? followups[Math.min(step - 2, followups.length - 1)]! : template.bodyTemplate;
   const pain = pickByHash(template.painVariants, seed + 2n);
 
   /* Two-pass: opener / pain first (may themselves contain {{business}} or {{city}}),
@@ -348,7 +375,7 @@ export function renderEmail(template: Template, ctx: RenderContext): RenderedEma
 
   return {
     subject: replace(subject),
-    body: replace(template.bodyTemplate).trim(),
+    body: replace(bodySource).trim(),
     slotKey,
     variantSeed: seed,
   };

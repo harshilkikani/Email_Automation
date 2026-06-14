@@ -125,6 +125,19 @@ describe('renderEmail opener override', () => {
     expect(renderEmail(tpl, ctx).body).toContain('Custom AI opener about Acme.');
   });
 
+  it('renders a follow-up body (Re: subject) for step > 1', () => {
+    const tpl = defaultTemplateFor('Plumber');
+    const ctx = {
+      leadId: 'lead-1', business: 'Acme', city: 'Austin',
+      signals: { webPresenceLevel: 'none' as const, isStormZone: false, niche: 'Plumber' as const, hasOnlineBooking: false },
+      fromName: 'Sarah', fromSignoff: 'Keres AI', step: 2,
+    };
+    const out = renderEmail(tpl, ctx);
+    expect(out.subject.startsWith('Re: ')).toBe(true);
+    expect(out.body).toMatch(/Acme/);
+    expect(out.body).toContain('Sarah');     // persona signoff carries into follow-ups
+  });
+
   it('falls back to deterministic slot opener when no opener provided', () => {
     const tpl = defaultTemplateFor('Plumber');
     const ctx = {

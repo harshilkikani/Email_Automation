@@ -20,6 +20,10 @@ export interface QuickScrapeInput {
   city: string;
   state: string;
   count: number;
+  /** Number of follow-up touches after the first email (0 = single send). */
+  followups?: number;
+  /** Days between touches. */
+  stepDelayDays?: number;
 }
 
 export interface QuickScrapeResult {
@@ -40,21 +44,22 @@ export async function quickScrape(db: Database, input: QuickScrapeInput): Promis
     state: input.state, targetCount: Math.max(1, Math.min(input.count, 100)),
   });
 
-  return stageAndReview(db, input.orgId, input.niche, `${input.city}, ${input.state.toUpperCase()}`, disc.leadIds, disc.found, disc.inserted);
+  return stageAndReview(db, input, `${input.city}, ${input.state.toUpperCase()}`, disc.leadIds, disc.found, disc.inserted);
 }
 
 /** Scrape & Send variant sourced from imported state-license lists (free niche data). */
 export async function quickFromLicenses(db: Database, input: QuickScrapeInput): Promise<QuickScrapeResult & { needsFinder?: boolean }> {
   const r = await promoteLicensees(db, { orgId: input.orgId, niche: input.niche, state: input.state, count: input.count });
-  const res = await stageAndReview(db, input.orgId, input.niche, `${input.niche} licensees — ${input.state.toUpperCase()}`, r.leadIds, r.considered, r.inserted);
+  const res = await stageAndReview(db, input, `${input.niche} licensees — ${input.state.toUpperCase()}`, r.leadIds, r.considered, r.inserted);
   return { ...res, withEmail: r.websitesFound, needsFinder: r.needsFinder };
 }
 
-/** Shared: personalize the batch, stage a campaign, and build the review payload. */
+/** Shared: personalize the batch, stage a campaign (with sequence), build the review payload. */
 async function stageAndReview(
-  db: Database, orgId: string, niche: Niche, label: string,
+  db: Database, input: QuickScrapeInput, label: string,
   leadIds: string[], found: number, inserted: number,
 ): Promise<QuickScrapeResult> {
+  const { orgId, niche } = input;
   for (const id of leadIds) {
     try { await personalizeLead(db, id); } catch { /* best-effort */ }
   }
@@ -66,6 +71,8 @@ async function stageAndReview(
     templateKey: tpl.key,
     subjectA: tpl.subjectVariants[0] ?? 'Quick question, {{business}}',
     audienceFilter: { leadIds },
+    sequenceSteps: 1 + Math.max(0, input.followups ?? 0),
+    stepDelayDays: input.stepDelayDays ?? 3,
   });
   const recipientCount = leadIds.length ? await buildRecipients(db, campaignId) : 0;
 
