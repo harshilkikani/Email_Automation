@@ -14,6 +14,7 @@ import {
 import { classifyPhone } from '@keres/providers';
 import { getConfig } from './config.js';
 import { runDiscovery } from './services/discovery.js';
+import { quickScrape, quickStatus } from './services/quick.js';
 import {
   createCampaign, buildRecipients, renderPreview,
 } from './services/campaigns.js';
@@ -314,6 +315,50 @@ export function registerRoutes(app: FastifyInstance) {
       targetCount: b.targetCount ?? 25,
     });
     return { ok: true, ...out };
+  });
+
+  /* ────────────── Quick: Scrape & Send ────────────── */
+  app.post('/api/quick/scrape', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niche?: string; city?: string; state?: string; count?: number };
+    if (!b.niche || !b.city || !b.state) return { ok: false, error: 'missing_fields' };
+    let r;
+    try {
+      r = await quickScrape(getDb(), {
+        orgId, niche: b.niche as 'Septic', city: b.city, state: b.state, count: b.count ?? 25,
+      });
+    } catch (e: any) {
+      /* Discovery source (OSM/Overpass) can time out or be empty — surface a
+         clean message instead of a 500 so the UI can suggest another search. */
+      return { ok: false, error: 'discovery_failed', detail: e?.message ?? String(e) };
+    }
+    await writeAudit('quick_scrape', r.campaignId, { niche: b.niche, city: b.city, state: b.state, found: r.found, withEmail: r.withEmail }, req);
+    return { ok: true, ...r };
+  });
+
+  /* Send = launch the staged campaign through the full launch gate. */
+  app.post('/api/quick/send', async (req) => {
+    const db = getDb();
+    const b = (req.body ?? {}) as { campaignId?: string; override?: { reason: string } };
+    if (!b.campaignId) return { ok: false, error: 'missing_campaignId' };
+    const camp = (await db.select().from(schema.campaigns).where(eq(schema.campaigns.id, b.campaignId)).limit(1))[0];
+    if (!camp) return { ok: false, error: 'not_found' };
+    if (camp.recipientCount === 0) await buildRecipients(db, b.campaignId);
+    const gate = await evaluateLaunchGate(db, {
+      campaignId: b.campaignId, bouncePausePct: cfg.bouncePausePct,
+      complaintPausePct: cfg.complaintPausePct, seedlistTtlHours: 24 * 7,
+    });
+    if (!gate.ok && !b.override?.reason) return { ok: false, gate };
+    await db.update(schema.campaigns).set({ status: 'running', launchedAt: new Date() })
+      .where(eq(schema.campaigns.id, b.campaignId));
+    await writeAudit('quick_send', b.campaignId, { recipients: camp.recipientCount, overridden: !!b.override?.reason }, req);
+    return { ok: true, recipientCount: camp.recipientCount };
+  });
+
+  app.get('/api/quick/status', async (req) => {
+    const id = (req.query as { campaignId?: string }).campaignId;
+    if (!id) return { ok: false, error: 'missing_campaignId' };
+    return { ok: true, ...(await quickStatus(getDb(), id)) };
   });
 
   /* ────────────── Leads ────────────── */

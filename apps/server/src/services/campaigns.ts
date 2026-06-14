@@ -7,7 +7,7 @@ import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import {
   bucketFor, REACH_SAMPLE, ENGAGEMENT_SAMPLE, stratifiedSample,
-  defaultTemplateFor, renderEmail, TEMPLATES, type Template,
+  defaultTemplateFor, renderEmail, pickSignoffName, TEMPLATES, type Template,
 } from '@keres/core';
 import { finalRender, lintEmail } from '@keres/email';
 import { getConfig } from '../config.js';
@@ -181,6 +181,9 @@ export async function renderPreview(db: Database, campaignId: string, leadId: st
   if (!lead) throw new Error('lead_not_found');
   const signals = (await db.select().from(schema.leadSignals).where(eq(schema.leadSignals.leadId, leadId)).limit(1))[0];
 
+  const cfg = getConfig();
+  /* Match what sender-pipeline actually sends: rotated persona + cached opener. */
+  const persona = pickSignoffName(leadId, cfg.org.signoffNames) ?? org.fromName ?? cfg.org.fromName;
   const tpl: Template = TEMPLATES[camp.templateKey] ?? defaultTemplateFor(lead.niche as 'Septic');
   const rendered = renderEmail(tpl, {
     leadId,
@@ -192,11 +195,11 @@ export async function renderPreview(db: Database, campaignId: string, leadId: st
       niche: lead.niche as 'Septic',
       hasOnlineBooking: signals?.hasOnlineBooking ?? false,
     },
-    fromName: org.fromName ?? getConfig().org.fromName,
+    fromName: persona,
     fromSignoff: org.name,
+    opener: signals?.personalizedOpener ?? undefined,
   });
 
-  const cfg = getConfig();
   const finalOut = finalRender({
     rendered,
     to: lead.email ?? '',
@@ -204,7 +207,7 @@ export async function renderPreview(db: Database, campaignId: string, leadId: st
     orgScopeKey: camp.orgId,
     campaignId: camp.id,
     identity: {
-      fromName: org.fromName ?? cfg.org.fromName,
+      fromName: persona,
       fromEmail: org.fromEmail ?? cfg.org.fromEmail,
       replyTo: org.replyTo ?? cfg.org.replyTo,
       unsubMailto: org.replyTo ?? cfg.org.replyTo,

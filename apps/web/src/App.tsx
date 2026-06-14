@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import { ToastProvider } from './toast';
 import { api, login } from './api';
+import ScrapeSend from './pages/ScrapeSend';
 import Dashboard from './pages/Dashboard';
 import Discover from './pages/Discover';
 import Leads from './pages/Leads';
@@ -16,20 +17,24 @@ import Diagnostics from './pages/Diagnostics';
 import ProviderUsage from './pages/ProviderUsage';
 import FirstRun from './pages/FirstRun';
 
-const TABS = [
-  { to: '/',                ico: '⌂', label: 'Dashboard' },
-  { to: '/first-run',       ico: '◆', label: 'First run' },
+const PRIMARY_TABS = [
+  { to: '/',         ico: '✦', label: 'Scrape & Send' },
+  { to: '/leads',    ico: '◫', label: 'Leads' },
+  { to: '/inbox',    ico: '✉', label: 'Inbox' },
+  { to: '/settings', ico: '⚙', label: 'Settings' },
+];
+
+const ADVANCED_TABS = [
+  { to: '/dashboard',       ico: '⌂', label: 'Dashboard' },
   { to: '/discover',        ico: '✦', label: 'Find Leads' },
-  { to: '/leads',           ico: '◫', label: 'Leads' },
   { to: '/campaigns',       ico: '✶', label: 'Campaigns' },
-  { to: '/validation',      ico: '◐', label: 'Validation' },
-  { to: '/inbox',           ico: '✉', label: 'Inbox' },
   { to: '/deliverability',  ico: '◈', label: 'Deliverability' },
+  { to: '/validation',      ico: '◐', label: 'Validation' },
   { to: '/diagnostics',     ico: '✚', label: 'Diagnostics' },
   { to: '/costs',           ico: '$', label: 'Costs' },
   { to: '/provider-usage',  ico: '◇', label: 'Provider usage' },
   { to: '/suppression',     ico: '⊘', label: 'Suppression' },
-  { to: '/settings',        ico: '⚙', label: 'Settings' },
+  { to: '/first-run',       ico: '◆', label: 'First run' },
 ];
 
 function Login({ onAuth }: { onAuth: () => void }) {
@@ -66,6 +71,7 @@ export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [sampleMode, setSampleMode] = useState(true);
   const [enableSes, setEnableSes] = useState<boolean | null>(null);
+  const [advOpen, setAdvOpen] = useState(false);
   const location = useLocation();
 
   useEffect(() => {
@@ -125,12 +131,30 @@ export default function App() {
             </div>
           </div>
           <nav className="nav-tabs">
-            {TABS.map(t => (
+            {PRIMARY_TABS.map(t => (
               <NavLink key={t.to} to={t.to} end={t.to === '/'}
                 className={({ isActive }) => 'nav-tab' + (isActive ? ' active' : '')}>
                 <span className="ico">{t.ico}</span>{t.label}
               </NavLink>
             ))}
+            <div style={{ position: 'relative' }}>
+              <button className="nav-tab" onClick={() => setAdvOpen(o => !o)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', font: 'inherit', color: 'inherit' }}>
+                <span className="ico">⋯</span>Advanced ▾
+              </button>
+              {advOpen && (
+                <div onMouseLeave={() => setAdvOpen(false)}
+                  style={{ position: 'absolute', top: '100%', right: 0, zIndex: 50, minWidth: 200, background: 'var(--panel, #131519)', border: '1px solid var(--line, #23262d)', borderRadius: 10, padding: 6, boxShadow: '0 8px 24px rgba(0,0,0,.4)' }}>
+                  {ADVANCED_TABS.map(t => (
+                    <NavLink key={t.to} to={t.to} onClick={() => setAdvOpen(false)}
+                      className={({ isActive }) => 'nav-tab' + (isActive ? ' active' : '')}
+                      style={{ display: 'flex', gap: 8, padding: '8px 12px', borderRadius: 8 }}>
+                      <span className="ico">{t.ico}</span>{t.label}
+                    </NavLink>
+                  ))}
+                </div>
+              )}
+            </div>
           </nav>
           <div className="nav-right">
             <span className={'conn-pill ' + (healthy ? 'online' : 'offline')}>
@@ -142,7 +166,8 @@ export default function App() {
         {setupBanner}
         <main key={location.pathname} className="page">
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<ScrapeSend />} />
+            <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/discover" element={<Discover />} />
             <Route path="/leads" element={<Leads />} />
             <Route path="/campaigns" element={<Campaigns />} />

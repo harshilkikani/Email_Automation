@@ -32,6 +32,8 @@ export interface RunDiscoveryOutput {
   duplicates: number;
   disqualified: number;
   attribution: string;
+  /** IDs of the leads inserted this run (for targeting the exact batch). */
+  leadIds: string[];
 }
 
 export async function runDiscovery(db: Database, input: RunDiscoveryInput): Promise<RunDiscoveryOutput> {
@@ -58,6 +60,7 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
     .from(schema.leads)
     .where(eq(schema.leads.orgId, input.orgId));
   for (const e of existing) addToIndex(idx, e);
+  const insertedLeadIds: string[] = [];
 
   let inserted = 0, duplicates = 0, disqualified = 0;
 
@@ -178,6 +181,7 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
     });
 
     addToIndex(idx, cand);
+    insertedLeadIds.push(leadId);
     inserted++;
   }
 
@@ -187,6 +191,7 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
     duplicates,
     disqualified,
     attribution,
+    leadIds: insertedLeadIds,
   };
 }
 
