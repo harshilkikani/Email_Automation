@@ -210,6 +210,7 @@ export async function renderPreview(db: Database, campaignId: string, leadId: st
     fromName: persona,
     fromSignoff: org.name,
     opener: signals?.personalizedOpener ?? undefined,
+    body: signals?.personalizedBody ?? undefined,
   });
 
   const finalOut = finalRender({

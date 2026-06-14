@@ -90,6 +90,13 @@ export interface AiAdapter {
    * cache the result — never in the send hot path.
    */
   personalizeOpener(input: PersonalizeOpenerInput): Promise<string | null>;
+
+  /**
+   * Write the FULL email body (deep personalization) grounded only in the
+   * supplied facts. Greets by owner first name when given. Returns `null` to use
+   * the deterministic composer / template. Batch-only (cached), like the opener.
+   */
+  personalizeEmail(input: PersonalizeOpenerInput): Promise<string | null>;
 }
 
 /* ────────── Noop adapter ────────── */
@@ -213,6 +220,11 @@ export class NoopAiAdapter implements AiAdapter {
 
   /** AI off → no opener; caller falls back to the deterministic slot opener. */
   async personalizeOpener(_input: PersonalizeOpenerInput): Promise<string | null> {
+    return null;
+  }
+
+  /** AI off → no full body; caller falls back to composeEmail / the template. */
+  async personalizeEmail(_input: PersonalizeOpenerInput): Promise<string | null> {
     return null;
   }
 }
@@ -439,6 +451,36 @@ Respond with ONLY the opener text.`;
     }
   }
 
+  async personalizeEmail(input: PersonalizeOpenerInput): Promise<string | null> {
+    if (input.deficiencies.length === 0) return null;
+    const facts = input.deficiencies.slice(0, 3).map((d, i) => `${i + 1}. ${d.fact} → ${d.fix}`).join('\n');
+    const prompt = `Write the BODY of a short cold email to a local ${input.niche} business.
+
+Business: ${input.business}
+City: ${input.city || '(unknown)'}
+${input.ownerFirst ? `Owner first name (greet them by name): ${input.ownerFirst}` : ''}
+What we sell: ${input.product}
+
+VERIFIED facts (gap → how we fix it; use ONLY these, never invent):
+${facts}
+
+Write a warm, human email that:
+- greets the owner${input.ownerFirst ? ` (${input.ownerFirst})` : ''}
+- names ONE specific gap from the facts and how we fix it
+- ends with a soft 10-minute-look ask
+- is plain text, 60–90 words, no subject line, NO signature/sign-off (added later), no links, no emojis
+
+Respond with ONLY the email body text.`;
+
+    try {
+      const raw = await this.complete(prompt);
+      const cleaned = sanitizeEmailBody(raw, input.business);
+      return cleaned ? `${cleaned}\n\n{{from_name}}\n{{from_signoff}}` : null;
+    } catch {
+      return null;   // fail-closed → caller uses composeEmail / template
+    }
+  }
+
   private async complete(prompt: string): Promise<string> {
     const res = await fetch(`${this.baseUrl}/api/generate`, {
       method: 'POST',
@@ -463,6 +505,27 @@ function extractJsonObject(raw: string): Record<string, unknown> {
   const m = raw.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('no_json_object');
   return JSON.parse(m[0]) as Record<string, unknown>;
+}
+
+/**
+ * Sanitize an LLM-written email body: strip preamble/quotes/signoff, reject
+ * links/emojis, collapse blank lines, cap length, require the business mention.
+ * Returns '' if it doesn't look usable (caller falls back to the composer).
+ */
+export function sanitizeEmailBody(raw: string, business: string): string {
+  let s = (raw ?? '').trim();
+  if (!s) return '';
+  s = s.replace(/^(here(?:'s| is)[^:]*:|email body:|body:|sure[,!]?)\s*/i, '').trim();
+  s = s.replace(/^["'“”`]+|["'“”`]+$/g, '').trim();
+  if (/https?:\/\/|www\.|<[a-z/]/i.test(s)) return '';
+  s = s.replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '');
+  /* Drop any model-added signoff (we append our own persona signoff). */
+  s = s.replace(/\n+\s*(best|thanks|thank you|regards|cheers|sincerely|warmly)[,.!]?[\s\S]*$/i, '').trim();
+  s = s.replace(/\n{3,}/g, '\n\n').trim();
+  const words = s.split(/\s+/);
+  if (words.length < 25 || words.length > 140) return '';
+  if (business && business.length > 2 && !s.toLowerCase().includes(business.toLowerCase().split(/\s+/)[0]!)) return '';
+  return s;
 }
 
 /**

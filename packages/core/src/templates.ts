@@ -294,6 +294,12 @@ export interface RenderContext {
   opener?: string;
   /** Sequence touch number (1 = first email; 2+ selects a follow-up body). */
   step?: number;
+  /**
+   * Pre-generated FULL email body (deep personalization). When present, it
+   * replaces the template body for the first touch; follow-ups still use bumps.
+   * May contain {{from_name}}/{{from_signoff}} tokens.
+   */
+  body?: string;
 }
 
 export interface RenderedEmail {
@@ -356,9 +362,11 @@ export function renderEmail(template: Template, ctx: RenderContext): RenderedEma
   /* Follow-ups reply in-thread → "Re: <subject>"; touch 1 uses the plain subject. */
   const baseSubject = pickByHash(variants, seed + 1n);
   const subject = step > 1 ? `Re: ${baseSubject}` : baseSubject;
-  /* Body: touch 1 = main template; touch N>1 = the (N-1)th follow-up bump. */
+  /* Body: touch 1 = pre-generated full body (if any) else template; N>1 = bump. */
   const followups = template.followups && template.followups.length > 0 ? template.followups : DEFAULT_FOLLOWUPS;
-  const bodySource = step > 1 ? followups[Math.min(step - 2, followups.length - 1)]! : template.bodyTemplate;
+  const bodySource = step > 1
+    ? followups[Math.min(step - 2, followups.length - 1)]!
+    : (ctx.body && ctx.body.trim() ? ctx.body : template.bodyTemplate);
   const pain = pickByHash(template.painVariants, seed + 2n);
 
   /* Two-pass: opener / pain first (may themselves contain {{business}} or {{city}}),

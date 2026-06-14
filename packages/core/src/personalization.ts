@@ -154,6 +154,46 @@ export function deterministicOpener(business: string, city: string, deficiencies
   return `${greeting}saw ${business}${where} — looks like it ${top.fact}.`.replace(/^([a-z])/, (m) => greeting ? m : m.toUpperCase());
 }
 
+/** Short, niche-flavored proof line for the composed email. */
+const NICHE_PROOF: Partial<Record<Niche, string>> = {
+  Septic: 'Most septic crews cover the cost from a single after-hours job they would have missed.',
+  Roofer: 'After a storm, one captured estimate usually pays for it many times over.',
+  HVAC: 'On the hottest days the calls never stop — none of them should go to voicemail.',
+  Plumber: 'A 2am burst-pipe call is a same-day job; missing it hands it to the next plumber.',
+  Electrician: 'Every after-hours call you catch is work that would have gone elsewhere.',
+  'Water/Mold': 'Water damage callers hire whoever answers first — that should be you.',
+  Towing: 'Roadside callers go straight down the list until someone picks up.',
+  'Real Estate': 'A lead that reaches a real person, not voicemail, is a lead you keep.',
+};
+
+/**
+ * Deterministic FULL email composed from the top verified deficiency + owner
+ * greeting + the fix + a niche proof line + CTA. Returns a complete body with
+ * {{from_name}}/{{from_signoff}} tokens (filled with the persona at render).
+ * Returns null when there's nothing specific to say (caller keeps the template).
+ */
+export function composeEmail(input: {
+  business: string; city: string; niche: Niche; deficiencies: Deficiency[];
+  ownerFirst?: string | null;
+}): string | null {
+  const top = input.deficiencies[0];
+  if (!top) return null;
+  const greet = input.ownerFirst && input.ownerFirst.trim() ? `Hi ${input.ownerFirst.trim()},` : 'Hi there,';
+  const where = input.city ? ` in ${input.city}` : '';
+  const fix = top.fix.charAt(0).toUpperCase() + top.fix.slice(1);
+  const proof = NICHE_PROOF[input.niche] ?? 'Most owners we work with book extra jobs within the first week.';
+  return `${greet}
+
+I was looking at ${input.business}${where} and noticed it ${top.fact}.
+
+${fix}. ${proof}
+
+Worth a quick 10-minute look? I can show you exactly how it'd work for ${input.business}.
+
+{{from_name}}
+{{from_signoff}}`;
+}
+
 export interface PersonalizeOpenerInput {
   business: string;
   city: string;

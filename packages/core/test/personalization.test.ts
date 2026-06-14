@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  deriveDeficiencies, deterministicOpener, sanitizeOpener,
+  deriveDeficiencies, deterministicOpener, sanitizeOpener, composeEmail,
   NoopAiAdapter, OllamaAdapter, renderEmail, defaultTemplateFor, pickSignoffName,
   type IntelFacts, type SignalFacts,
 } from '../src/index.js';
@@ -96,6 +96,34 @@ describe('OllamaAdapter.personalizeOpener', () => {
   it('returns null when there are no deficiencies (never invents)', async () => {
     const a = new OllamaAdapter('http://x', 'm');
     expect(await a.personalizeOpener({ business: 'Acme', city: 'Austin', niche: 'Plumber', deficiencies: [], product: 'x' })).toBeNull();
+  });
+});
+
+describe('composeEmail (deep whole-email personalization)', () => {
+  const defs = deriveDeficiencies(baseIntel, { ...baseSig, hasOnlineBooking: false });
+  it('composes a full body greeting the owner, naming the gap, with signoff tokens', () => {
+    const body = composeEmail({ business: 'Acme Septic', city: 'Austin', niche: 'Septic', deficiencies: defs, ownerFirst: 'John' })!;
+    expect(body).toContain('Hi John,');
+    expect(body).toContain('Acme Septic');
+    expect(body).toContain('no online booking');     // the specific gap
+    expect(body).toContain('{{from_name}}');          // persona filled at render
+    expect(body).toContain('{{from_signoff}}');
+  });
+  it('falls back to "Hi there," without an owner, and is null with no gap', () => {
+    expect(composeEmail({ business: 'Acme', city: '', niche: 'Septic', deficiencies: defs })).toContain('Hi there,');
+    expect(composeEmail({ business: 'Acme', city: '', niche: 'Septic', deficiencies: [] })).toBeNull();
+  });
+  it('renderEmail uses the provided full body for touch 1', () => {
+    const tpl = defaultTemplateFor('Septic');
+    const body = composeEmail({ business: 'Acme Septic', city: 'Austin', niche: 'Septic', deficiencies: defs, ownerFirst: 'John' })!;
+    const out = renderEmail(tpl, {
+      leadId: 'l1', business: 'Acme Septic', city: 'Austin',
+      signals: { webPresenceLevel: 'basic' as const, isStormZone: false, niche: 'Septic' as const, hasOnlineBooking: false },
+      fromName: 'Sarah', fromSignoff: 'Keres AI', body, step: 1,
+    });
+    expect(out.body).toContain('Hi John,');
+    expect(out.body).toContain('Sarah');              // persona token expanded
+    expect(out.body).not.toContain('{{from_name}}');  // tokens resolved
   });
 });
 

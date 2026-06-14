@@ -16,7 +16,7 @@ import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import type { FastifyBaseLogger } from 'fastify';
 import {
-  deriveDeficiencies, deterministicOpener,
+  deriveDeficiencies, deterministicOpener, composeEmail,
   type IntelFacts, type SignalFacts, type Niche,
 } from '@keres/core';
 import { getAiAdapter } from './ai.js';
@@ -69,8 +69,24 @@ export async function personalizeLead(db: Database, leadId: string): Promise<str
   }
   if (!opener) return null;
 
+  /* Deep personalization: a FULL email body (AI if available, else the
+     deterministic composer). Replaces the template body for the first touch. */
+  let body: string | null = null;
+  try {
+    body = await adapter.personalizeEmail({
+      business: lead.name, city: lead.city ?? '',
+      niche: lead.niche as Niche, deficiencies, product: PRODUCT, ownerFirst,
+    });
+  } catch (e) {
+    obs().captureException(e, { leadId, op: 'personalize_email' });
+  }
+  if (!body) {
+    body = composeEmail({ business: lead.name, city: lead.city ?? '', niche: lead.niche as Niche, deficiencies, ownerFirst });
+  }
+
   await db.update(schema.leadSignals).set({
     personalizedOpener: opener,
+    personalizedBody: body,
     personalizationFact: deficiencies[0]!.code,
     personalizationModel: model,
     personalizationAt: new Date(),
