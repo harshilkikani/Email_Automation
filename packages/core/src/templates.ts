@@ -282,6 +282,17 @@ export interface RenderedEmail {
   variantSeed: bigint;
 }
 
+/**
+ * Pick a sender persona name for a lead, stable per lead-id so a given business
+ * always sees the same "rep" (consistent if they reply). Returns null when no
+ * names are configured (caller falls back to the org's from-name).
+ */
+export function pickSignoffName(leadId: string, names: string[]): string | null {
+  const pool = names.filter(n => n && n.trim());
+  if (pool.length === 0) return null;
+  return pickByHash(pool, stableHash(`signoff:${leadId}`)).trim();
+}
+
 export function pickSlot(signals: RenderContext['signals'], variantOverride?: SlotKey): SlotKey {
   if (variantOverride) return variantOverride;
   if (signals.webPresenceLevel === 'none') return 'no_website';

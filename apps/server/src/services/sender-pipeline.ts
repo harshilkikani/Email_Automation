@@ -9,7 +9,7 @@
 import { and, eq, sql, asc, inArray, lte, or, isNull } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
-import { defaultTemplateFor, renderEmail, TEMPLATES, type Template, type CampaignDecision } from '@keres/core';
+import { defaultTemplateFor, renderEmail, pickSignoffName, TEMPLATES, type Template, type CampaignDecision } from '@keres/core';
 import { finalRender, lintEmail, highestSeverity } from '@keres/email';
 import { randomUUID } from 'node:crypto';
 import { getConfig } from '../config.js';
@@ -199,6 +199,11 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
     const { senderIdentity, template: tpl, subjectOverrides } = decision;
     const signals = signalMap.get(lead.id);
 
+    /* Sender persona: a name rotated stably per lead for the From display + the
+       signoff, so each business consistently sees one "rep". Falls back to the
+       org from-name when no personas are configured. */
+    const persona = pickSignoffName(lead.id, cfg.org.signoffNames) ?? senderIdentity.fromName;
+
     const rendered = renderEmail(tpl, {
       leadId: lead.id,
       business: lead.name,
@@ -209,7 +214,7 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
         niche: lead.niche as 'Septic',
         hasOnlineBooking: signals?.hasOnlineBooking ?? false,
       },
-      fromName: senderIdentity.fromName,
+      fromName: persona,
       fromSignoff: org.name,
       subjectOverrides,
       opener: signals?.personalizedOpener ?? undefined,
@@ -222,7 +227,7 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
       orgScopeKey: org.id,
       campaignId: camp.id,
       identity: {
-        fromName: senderIdentity.fromName,
+        fromName: persona,
         fromEmail: senderIdentity.fromEmail,
         replyTo: senderIdentity.replyTo,
         unsubMailto: senderIdentity.replyTo,

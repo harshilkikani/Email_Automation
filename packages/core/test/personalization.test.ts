@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   deriveDeficiencies, deterministicOpener, sanitizeOpener,
-  NoopAiAdapter, OllamaAdapter, renderEmail, defaultTemplateFor,
+  NoopAiAdapter, OllamaAdapter, renderEmail, defaultTemplateFor, pickSignoffName,
   type IntelFacts, type SignalFacts,
 } from '../src/index.js';
 
@@ -96,6 +96,21 @@ describe('OllamaAdapter.personalizeOpener', () => {
   it('returns null when there are no deficiencies (never invents)', async () => {
     const a = new OllamaAdapter('http://x', 'm');
     expect(await a.personalizeOpener({ business: 'Acme', city: 'Austin', niche: 'Plumber', deficiencies: [], product: 'x' })).toBeNull();
+  });
+});
+
+describe('pickSignoffName', () => {
+  const pool = ['Jake', 'Sarah', 'Marcus', 'Emily'];
+  it('is stable per lead id', () => {
+    expect(pickSignoffName('lead-1', pool)).toBe(pickSignoffName('lead-1', pool));
+  });
+  it('varies across leads and stays within the pool', () => {
+    const picks = ['a', 'b', 'c', 'd', 'e', 'f'].map(id => pickSignoffName(id, pool));
+    picks.forEach(p => expect(pool).toContain(p));
+    expect(new Set(picks).size).toBeGreaterThan(1);
+  });
+  it('returns null with no names (caller falls back to org from-name)', () => {
+    expect(pickSignoffName('lead-1', [])).toBeNull();
   });
 });
 

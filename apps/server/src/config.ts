@@ -55,6 +55,8 @@ export interface KeresConfig {
     physicalAddress: string;
     outreachSubdomain: string;
     defaultBookingLink: string;
+    /** Sender personas rotated (stably per lead) for the From name + signoff. */
+    signoffNames: string[];
   };
 
   ses: {
@@ -227,6 +229,8 @@ export function getConfig(): Readonly<KeresConfig> {
       physicalAddress: str('PHYSICAL_ADDRESS', ''),
       outreachSubdomain: str('OUTREACH_SUBDOMAIN', 'outreach.keresai.com'),
       defaultBookingLink: str('DEFAULT_BOOKING_LINK', 'https://cal.keresai.com/intro'),
+      signoffNames: (str('SIGNOFF_NAMES') || 'Jake,Sarah,Marcus,Emily,Dan,Rachel,Chris,Megan')
+        .split(',').map(s => s.trim()).filter(Boolean),
     },
 
     ses: {
