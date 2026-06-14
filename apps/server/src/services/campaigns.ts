@@ -10,6 +10,7 @@ import {
   defaultTemplateFor, renderEmail, pickSignoffName, TEMPLATES, type Template,
 } from '@keres/core';
 import { finalRender, lintEmail } from '@keres/email';
+import { isSendableStatus } from './verify.js';
 import { getConfig } from '../config.js';
 import { canSend, type GateInput, type GateResult } from './gates.js';
 
@@ -55,9 +56,16 @@ export async function resolveAudience(
   db: Database, orgId: string, filter: AudienceFilter,
 ): Promise<{ leadIds: string[]; bucketByLeadId: Record<string, string | null> }> {
   if (filter.leadIds && filter.leadIds.length > 0) {
+    /* Even an explicit lead list only emails verified addresses. */
+    const rows = await db.select({ id: schema.leads.id, email: schema.leads.email, ev: schema.leads.emailVerificationStatus })
+      .from(schema.leads).where(inArray(schema.leads.id, filter.leadIds));
     const buckets: Record<string, string | null> = {};
-    for (const id of filter.leadIds) buckets[id] = null;
-    return { leadIds: filter.leadIds, bucketByLeadId: buckets };
+    const idList: string[] = [];
+    for (const r of rows) {
+      if (!r.email || !isSendableStatus(r.ev)) continue;
+      buckets[r.id] = null; idList.push(r.id);
+    }
+    return { leadIds: idList, bucketByLeadId: buckets };
   }
   const conds = [eq(schema.leads.orgId, orgId), isNull(schema.leads.deletedAt), eq(schema.leads.disqualified, false)];
   if (filter.niche) conds.push(eq(schema.leads.niche, filter.niche));
@@ -67,11 +75,11 @@ export async function resolveAudience(
   if (filter.status === 'uncontacted') conds.push(inArray(schema.leads.status, ['new', 'uncontacted']));
   else if (filter.status === 'new') conds.push(eq(schema.leads.status, 'new'));
 
-  const rows = await db.select({ id: schema.leads.id, score: schema.leads.score, email: schema.leads.email })
+  const rows = await db.select({ id: schema.leads.id, score: schema.leads.score, email: schema.leads.email, ev: schema.leads.emailVerificationStatus })
     .from(schema.leads)
     .where(and(...conds));
 
-  const withEmail = rows.filter(r => r.email);
+  const withEmail = rows.filter(r => r.email && isSendableStatus(r.ev));
 
   if (filter.stratified === 'reach' || filter.stratified === 'engagement') {
     const spec = filter.stratified === 'reach' ? REACH_SAMPLE : ENGAGEMENT_SAMPLE;

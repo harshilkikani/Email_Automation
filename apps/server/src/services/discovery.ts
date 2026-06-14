@@ -8,13 +8,14 @@ import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import {
   addToIndex, checkDuplicate, makeIndex, hardFilter,
-  type Niche, type ScoringInputs, type WebPresenceLevel,
+  type Niche, type ScoringInputs, type WebPresenceLevel, type LeadCandidate,
 } from '@keres/core';
 import { scoreLeadEnhanced } from './scoring.js';
 import {
-  OsmAdapter, OsmSampleAdapter, type DiscoveryProvider,
+  OsmAdapter, OsmSampleAdapter, PlacesAdapter, type DiscoveryProvider,
   YelpAdapter, Scraper, classifyPhone, LicenseRegistry,
 } from '@keres/providers';
+import { getVerifier } from './verify.js';
 import { getConfig } from '../config.js';
 import { lookupLicense } from './license-importer.js';
 
@@ -44,10 +45,31 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
   const yelp = new YelpAdapter({ enabled: cfg.yelp.enabled && !cfg.sampleMode, apiKey: cfg.yelp.apiKey });
   const scraper = new Scraper({ enabled: !cfg.sampleMode, userAgent: cfg.osm.userAgent });
   const licenses = new LicenseRegistry(cfg.sampleMode);
+  const verifier = getVerifier();
 
-  const { candidates: rawCandidates, attribution = '' } = await osm.search({
-    niche: input.niche, city: input.city, state: input.state, targetCount: input.targetCount * 2,
-  });
+  /* Primary source: Google Places (New) when enabled — real businesses across any
+     industry, with websites to scrape. Falls back to OSM otherwise. */
+  const places = new PlacesAdapter({ enabled: cfg.places.enabled && !cfg.sampleMode, apiKey: cfg.places.apiKey });
+  let rawCandidates: LeadCandidate[];
+  let attribution = '';
+  if (places.isEnabled()) {
+    const r = await places.search({ niche: input.niche, city: input.city, state: input.state, targetCount: input.targetCount * 2 });
+    rawCandidates = r.candidates; attribution = r.attribution ?? '';
+    if (r.costCents > 0) {
+      await db.insert(schema.costEvents).values({
+        orgId: input.orgId, provider: 'places', sku: 'text_search',
+        unitCount: 1, costCents: r.costCents,
+      }).catch(() => undefined);
+    }
+    /* If Places returned nothing (e.g. budget/key issue), fall back to OSM. */
+    if (rawCandidates.length === 0) {
+      const o = await osm.search({ niche: input.niche, city: input.city, state: input.state, targetCount: input.targetCount * 2 });
+      rawCandidates = o.candidates; attribution = o.attribution ?? attribution;
+    }
+  } else {
+    const o = await osm.search({ niche: input.niche, city: input.city, state: input.state, targetCount: input.targetCount * 2 });
+    rawCandidates = o.candidates; attribution = o.attribution ?? '';
+  }
 
   /* Build dedupe index from existing leads. */
   const idx = makeIndex();
@@ -79,6 +101,19 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
       ? await scraper.probe(cand.website ?? '')
       : { webPresenceLevel: cand.website ? 'basic' : 'none', emails: [], hasOnlineBooking: false, deadDomain: false, evidence: { sample: true } } as { webPresenceLevel: WebPresenceLevel; emails: string[]; hasOnlineBooking: boolean; deadDomain: boolean; evidence: Record<string, unknown> };
     if (probe.emails.length > 0 && !cand.email) cand.email = probe.emails[0] ?? null;
+
+    /* Free MX/syntax/disposable verification of the scraped email. Only verified
+       emails become sendable; the rest are kept as leads but never emailed. */
+    let emailStatus: string | null = null;
+    let emailSource: string | null = null;
+    if (cand.email) {
+      try {
+        const v = await verifier.verify(cand.email);
+        emailStatus = v.status; emailSource = v.source;
+      } catch {
+        emailStatus = 'unknown'; emailSource = 'skipped';
+      }
+    }
 
     /* Prefer DB-backed lookup against `state_licensees` (populated via CSV
        importer per LICENSE-SOURCES.md). Fall back to the sample/stub adapter
@@ -143,6 +178,8 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
       niche: cand.niche,
       source: cand.source,
       sourceExternalId: cand.sourceExternalId ?? null,
+      emailVerificationStatus: emailStatus,
+      emailVerificationSource: emailSource,
       status: 'new',
       score: scored.score,
       scoringVersion: scored.scoringVersion,

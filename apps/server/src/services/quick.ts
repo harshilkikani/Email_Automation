@@ -11,6 +11,7 @@ import { defaultTemplateFor, type Niche } from '@keres/core';
 import { runDiscovery } from './discovery.js';
 import { personalizeLead } from './personalization.js';
 import { createCampaign, buildRecipients, renderPreview } from './campaigns.js';
+import { isSendableStatus } from './verify.js';
 
 export interface QuickScrapeInput {
   orgId: string;
@@ -24,9 +25,10 @@ export interface QuickScrapeResult {
   campaignId: string;
   found: number;          // businesses returned by discovery
   inserted: number;       // new leads added this run (after dedup/filters)
-  withEmail: number;      // of those, how many had a scrapeable email (= sendable)
+  withEmail: number;      // of those, how many had a scrapeable email
+  verified: number;       // of those, how many passed MX/syntax verification (= sendable)
   recipientCount: number; // recipients staged on the campaign
-  recipients: Array<{ name: string; city: string | null; email: string | null; opener: string | null }>;
+  recipients: Array<{ name: string; city: string | null; email: string | null; opener: string | null; verified: boolean }>;
   sample: Awaited<ReturnType<typeof renderPreview>> | null;
 }
 
@@ -56,7 +58,7 @@ export async function quickScrape(db: Database, input: QuickScrapeInput): Promis
 
   /* 4. Build the review list (+ a rendered sample of the first sendable one). */
   const leads = disc.leadIds.length
-    ? await db.select({ id: schema.leads.id, name: schema.leads.name, city: schema.leads.city, email: schema.leads.email })
+    ? await db.select({ id: schema.leads.id, name: schema.leads.name, city: schema.leads.city, email: schema.leads.email, ev: schema.leads.emailVerificationStatus })
         .from(schema.leads).where(inArray(schema.leads.id, disc.leadIds))
     : [];
   const openerRows = disc.leadIds.length
@@ -68,11 +70,13 @@ export async function quickScrape(db: Database, input: QuickScrapeInput): Promis
   const withEmail = leads.filter(l => l.email);
   const recipients = withEmail.map(l => ({
     name: l.name, city: l.city, email: l.email, opener: openerById.get(l.id) ?? null,
+    verified: isSendableStatus(l.ev),
   }));
+  const firstSendable = withEmail.find(l => isSendableStatus(l.ev)) ?? withEmail[0];
 
   let sample: QuickScrapeResult['sample'] = null;
-  if (withEmail[0]) {
-    try { sample = await renderPreview(db, campaignId, withEmail[0].id); } catch { /* ignore */ }
+  if (firstSendable) {
+    try { sample = await renderPreview(db, campaignId, firstSendable.id); } catch { /* ignore */ }
   }
 
   return {
@@ -80,6 +84,7 @@ export async function quickScrape(db: Database, input: QuickScrapeInput): Promis
     found: disc.found,
     inserted: disc.inserted,
     withEmail: withEmail.length,
+    verified: recipients.filter(r => r.verified).length,
     recipientCount,
     recipients,
     sample,

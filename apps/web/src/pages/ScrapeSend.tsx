@@ -4,9 +4,9 @@ import { useToast } from '../toast';
 
 const NICHES = ['Septic', 'Water/Mold', 'HVAC', 'Roofer', 'Plumber', 'Electrician', 'Towing', 'Real Estate'];
 
-interface Recipient { name: string; city: string | null; email: string | null; opener: string | null }
+interface Recipient { name: string; city: string | null; email: string | null; opener: string | null; verified: boolean }
 interface ScrapeResult {
-  campaignId: string; found: number; inserted: number; withEmail: number; recipientCount: number;
+  campaignId: string; found: number; inserted: number; withEmail: number; verified: number; recipientCount: number;
   recipients: Recipient[]; sample: { subject: string; body: string } | null;
 }
 interface Status { status: string | null; total: number; sent: number; failed: number; pending: number }
@@ -31,9 +31,9 @@ export default function ScrapeSend() {
     setBusy(true); setGate(null);
     const r = await api.post<ScrapeResult>('/quick/scrape', { niche, city, state, count });
     setBusy(false);
-    if (!r.ok || !r.data) { t.push('error', 'Scrape failed', r.error); return; }
+    if (!r.ok || !r.data) { t.push('error', r.error === 'discovery_failed' ? 'Discovery failed — try another city/trade' : 'Scrape failed', r.error); return; }
     setRes(r.data); setPhase('review');
-    t.push('success', `Found ${r.data.found} businesses · ${r.data.withEmail} with emails`);
+    t.push('success', `${r.data.found} found · ${r.data.withEmail} with email · ${r.data.verified} verified`);
   };
 
   const send = async () => {
@@ -92,7 +92,7 @@ export default function ScrapeSend() {
           <div className="panel">
             <div className="panel-head"><h2>2 · Review</h2></div>
             <div className="health-tiles" style={{ marginBottom: 14 }}>
-              {[['Found', res.found], ['New leads', res.inserted], ['With email', res.withEmail], ['Will send', res.recipientCount]].map(([k, v]) => (
+              {[['Found', res.found], ['New leads', res.inserted], ['With email', res.withEmail], ['Verified', res.verified], ['Will send', res.recipientCount]].map(([k, v]) => (
                 <div className="h-tile" key={k as string}><div className="ht-name">{k}</div><div className="ht-state">{v as number}</div></div>
               ))}
             </div>
@@ -107,12 +107,13 @@ export default function ScrapeSend() {
 
             {res.recipients.length > 0 ? (
               <table className="data-table" style={{ width: '100%', fontSize: 13 }}>
-                <thead><tr><th style={{ textAlign: 'left' }}>Business</th><th style={{ textAlign: 'left' }}>Email</th><th style={{ textAlign: 'left' }}>Opener</th></tr></thead>
+                <thead><tr><th style={{ textAlign: 'left' }}>Business</th><th style={{ textAlign: 'left' }}>Email</th><th style={{ textAlign: 'left' }}>Verified</th><th style={{ textAlign: 'left' }}>Opener</th></tr></thead>
                 <tbody>
                   {res.recipients.map((r, i) => (
-                    <tr key={i}>
+                    <tr key={i} style={{ opacity: r.verified ? 1 : 0.5 }}>
                       <td>{r.name}<div style={{ color: 'var(--fg-3)' }}>{r.city}</div></td>
                       <td>{r.email}</td>
+                      <td style={{ color: r.verified ? 'var(--accent)' : 'var(--fg-3)' }}>{r.verified ? '✓ verified' : 'skipped'}</td>
                       <td style={{ color: 'var(--fg-3)' }}>{r.opener ?? '—'}</td>
                     </tr>
                   ))}
