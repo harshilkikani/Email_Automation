@@ -94,6 +94,9 @@ export interface KeresConfig {
     dkimSelector: string;
   };
 
+  /** Background pool builder — auto-sweeps metros×niches to grow the lead pool. */
+  poolBuilder: { enabled: boolean };
+
   /** Email verification policy. */
   verify: {
     smtpProbe: boolean;       // SMTP RCPT mailbox probe (free; catches dead mailboxes)
@@ -285,6 +288,8 @@ export function getConfig(): Readonly<KeresConfig> {
       spfInclude: str('SMTP_SPF_INCLUDE', 'spf.spacemail.com'),
       dkimSelector: str('SMTP_DKIM_SELECTOR', 'spacemail'),
     },
+
+    poolBuilder: { enabled: bool('ENABLE_POOL_BUILDER', false) },
 
     verify: {
       smtpProbe: bool('ENABLE_SMTP_VERIFY', true),

@@ -32,8 +32,11 @@ export function hardFilter(ctx: HardFilterContext): DisqualificationDecision {
   if (!c.name || c.name.trim().length === 0) {
     return { ok: false, reason: 'no_name', detail: 'Candidate has no business name' };
   }
-  if (!c.phone) {
-    return { ok: false, reason: 'no_phone', detail: 'No phone in listing' };
+  /* Need SOME way to reach them. A website is enough (we scrape it for the
+     email) — requiring a phone here was silently dropping every website-only
+     and web-search (Brave) business, which have a site but no phone in-listing. */
+  if (!c.phone && !c.website && !c.email) {
+    return { ok: false, reason: 'no_contact', detail: 'No phone, website, or email' };
   }
 
   /* UPS / mailbox addresses */
@@ -59,8 +62,22 @@ export function hardFilter(ctx: HardFilterContext): DisqualificationDecision {
     return { ok: false, reason: 'nonprofit', detail: 'Nonprofit / religious org' };
   }
 
+  /* Niche relevance: web-search/Places sometimes return businesses in an
+     unrelated industry (a lawyer-referral or accounting firm tagged "Plumber").
+     Emailing them is wasted + raises spam risk, so drop obvious off-industry
+     names for the trade niches (Real Estate keeps realty/realtor terms). */
+  if (TRADE_NICHES.has(ctx.niche) && OFF_INDUSTRY.test(c.name)) {
+    return { ok: false, reason: 'off_niche', detail: 'Name indicates a non-target industry' };
+  }
+
   return { ok: true };
 }
+
+const TRADE_NICHES = new Set(['Septic', 'Roofer', 'Water/Mold', 'HVAC', 'Plumber', 'Electrician', 'Towing',
+  'Pest Control', 'Garage Door', 'Locksmith', 'Appliance Repair', 'Pool Service', 'Landscaping',
+  'Painter', 'Carpet Cleaning', 'Handyman', 'Tree Service',
+  'Fencing', 'Concrete', 'Moving', 'Junk Removal', 'Window Cleaning', 'Pressure Washing', 'Solar', 'Flooring']);
+const OFF_INDUSTRY = /\b(law|lawyer|attorney|attorneys|legal|paralegal|accounting|accountant|cpa|bookkeep|tax service|insurance|realty|realtor|real estate|dental|dentist|orthodont|medical|physician|clinic|hospital|pharmacy|chiropract|salon|spa|barber|nail|restaurant|cafe|café|bakery|catering|coffee|brewery|bank|credit union|mortgage|\bloan|financial|school|university|college|academy|daycare|staffing|recruit|notary|process serv|security (?:service|guard)|referral service|marketing|advertising|web design|software|\bit services\b|consulting|travel agency|funeral|veterinary|\bvet\b|\btv\b|television|\bchannel\b|\bnews\b|\bradio\b|broadcast|\bmedia\b|newspaper|magazine|museum|library|\bgov\b|municipal|city of|county of)\b/i;
 
 const US_STATES = new Set([
   'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',

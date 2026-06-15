@@ -170,6 +170,14 @@ function nicheToQuery(niche: Niche): string {
     Septic: 'septic service company', Roofer: 'roofing contractor', 'Water/Mold': 'water damage restoration',
     HVAC: 'HVAC contractor', Plumber: 'plumbing company', Electrician: 'electrician',
     Towing: 'towing service', 'Real Estate': 'real estate agency',
+    'Pest Control': 'pest control company', 'Garage Door': 'garage door repair company',
+    Locksmith: 'locksmith', 'Appliance Repair': 'appliance repair service',
+    'Pool Service': 'pool service company', Landscaping: 'landscaping company',
+    Painter: 'painting contractor', 'Carpet Cleaning': 'carpet cleaning service',
+    Handyman: 'handyman service', 'Tree Service': 'tree service company',
+    Fencing: 'fence company', Concrete: 'concrete contractor', Moving: 'moving company',
+    'Junk Removal': 'junk removal service', 'Window Cleaning': 'window cleaning service',
+    'Pressure Washing': 'pressure washing service', Solar: 'solar installer', Flooring: 'flooring contractor',
   };
   return m[niche] ?? niche;
 }

@@ -1141,6 +1141,54 @@ ${r.ok
     return { ok: true, rows };
   });
 
+  /* Daily send-limit status — so the UI can show "limit reached" + remaining. */
+  app.get('/api/send-status', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const d = (await db.select().from(schema.senderDomains)
+      .where(eq(schema.senderDomains.orgId, orgId)).limit(1))[0];
+    const pend = (await db.select({ n: sql<number>`count(*)::int` })
+      .from(schema.campaignRecipients)
+      .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignRecipients.campaignId))
+      .where(and(eq(schema.campaigns.status, 'running'), eq(schema.campaignRecipients.state, 'pending'))))[0];
+    const sentToday = d?.sendsToday ?? 0;
+    const dailyCap = d?.dailySendBudget ?? 0;
+    return {
+      ok: true,
+      sentToday, dailyCap,
+      remaining: Math.max(0, dailyCap - sentToday),
+      capReached: dailyCap > 0 && sentToday >= dailyCap,
+      warmupDay: d?.warmupDay ?? 0,
+      warmupState: d?.warmupState ?? null,
+      pending: Number(pend?.n ?? 0),
+    };
+  });
+
+  /* Sent mail: the emails WE sent (SMTP relay doesn't surface these anywhere
+     else in the app). Reads the rendered copy stored per recipient. */
+  app.get('/api/sent', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const rows = await db.select({
+      id: schema.campaignRecipients.id,
+      state: schema.campaignRecipients.state,
+      subject: schema.campaignRecipients.renderedSubject,
+      body: schema.campaignRecipients.renderedBody,
+      sentAt: schema.campaignRecipients.lastSentAt,
+      step: schema.campaignRecipients.step,
+      toName: schema.leads.name,
+      toEmail: schema.leads.email,
+      campaign: schema.campaigns.name,
+    })
+      .from(schema.campaignRecipients)
+      .innerJoin(schema.leads, eq(schema.leads.id, schema.campaignRecipients.leadId))
+      .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignRecipients.campaignId))
+      .where(and(eq(schema.campaignRecipients.orgId, orgId), sql`${schema.campaignRecipients.lastSentAt} IS NOT NULL`))
+      .orderBy(desc(schema.campaignRecipients.lastSentAt))
+      .limit(200);
+    return { ok: true, rows };
+  });
+
   app.patch('/api/inbound/:id', async (req) => {
     const { id } = req.params as { id: string };
     const b = req.body as { manualIntent?: string; triaged?: boolean; bookedDemo?: boolean };

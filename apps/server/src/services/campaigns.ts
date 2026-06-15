@@ -56,17 +56,28 @@ export async function createCampaign(db: Database, input: CampaignDraftInput): P
   return { id: row[0]!.id };
 }
 
+/** Every email address we've already SENT to (any campaign) — a hard guard so
+    no address is ever contacted twice, even if a lead's status update failed. */
+async function alreadySentEmails(db: Database, orgId: string): Promise<Set<string>> {
+  const rows = await db.select({ email: schema.leads.email })
+    .from(schema.emailEvents)
+    .innerJoin(schema.leads, eq(schema.leads.id, schema.emailEvents.leadId))
+    .where(and(eq(schema.emailEvents.orgId, orgId), eq(schema.emailEvents.eventType, 'send')));
+  return new Set(rows.map(r => (r.email ?? '').toLowerCase()).filter(Boolean));
+}
+
 export async function resolveAudience(
   db: Database, orgId: string, filter: AudienceFilter,
 ): Promise<{ leadIds: string[]; bucketByLeadId: Record<string, string | null> }> {
+  const sent = await alreadySentEmails(db, orgId);
   if (filter.leadIds && filter.leadIds.length > 0) {
-    /* Even an explicit lead list only emails verified addresses. */
+    /* Even an explicit lead list only emails verified, not-yet-emailed addresses. */
     const rows = await db.select({ id: schema.leads.id, email: schema.leads.email, ev: schema.leads.emailVerificationStatus })
       .from(schema.leads).where(inArray(schema.leads.id, filter.leadIds));
     const buckets: Record<string, string | null> = {};
     const idList: string[] = [];
     for (const r of rows) {
-      if (!r.email || !isSendableStatus(r.ev)) continue;
+      if (!r.email || !isSendableStatus(r.ev) || sent.has(r.email.toLowerCase())) continue;
       buckets[r.id] = null; idList.push(r.id);
     }
     return { leadIds: idList, bucketByLeadId: buckets };
@@ -83,7 +94,7 @@ export async function resolveAudience(
     .from(schema.leads)
     .where(and(...conds));
 
-  const withEmail = rows.filter(r => r.email && isSendableStatus(r.ev));
+  const withEmail = rows.filter(r => r.email && isSendableStatus(r.ev) && !sent.has(r.email.toLowerCase()));
 
   if (filter.stratified === 'reach' || filter.stratified === 'engagement') {
     const spec = filter.stratified === 'reach' ? REACH_SAMPLE : ENGAGEMENT_SAMPLE;

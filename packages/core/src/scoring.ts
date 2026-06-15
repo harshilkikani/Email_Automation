@@ -22,6 +22,11 @@ export const DEFAULT_WEIGHTS_V1: ScoringWeights = {
   nicheFit: {
     Septic: 10, 'Water/Mold': 10, HVAC: 9, Plumber: 9,
     Roofer: 8, Electrician: 6, Towing: 7, 'Real Estate': 4,
+    Locksmith: 8, 'Garage Door': 7, 'Pest Control': 7, 'Appliance Repair': 7,
+    'Tree Service': 7, Handyman: 6, 'Pool Service': 6, Landscaping: 5,
+    Painter: 5, 'Carpet Cleaning': 5,
+    Fencing: 6, Concrete: 6, Moving: 6, 'Junk Removal': 6, 'Window Cleaning': 5,
+    'Pressure Washing': 5, Solar: 6, Flooring: 5,
   },
   phonePresent: 8,
   phoneLineLandlineOrVoip: 4,

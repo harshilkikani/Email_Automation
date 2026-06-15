@@ -206,7 +206,10 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
       confidence: scored.confidence,
       disqualified: scored.disqualified,
       disqualificationReason: scored.disqualificationReason ?? null,
-    }).returning({ id: schema.leads.id });
+      /* An email can collide on the (org,email) unique index when it's only
+         discovered DURING scraping (after the upfront dedupe check). Skip it
+         gracefully instead of throwing and aborting the whole metro sweep. */
+    }).onConflictDoNothing().returning({ id: schema.leads.id });
 
     const leadId = inserted2[0]?.id;
     if (!leadId) continue;

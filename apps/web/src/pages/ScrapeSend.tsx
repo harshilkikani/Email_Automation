@@ -2,8 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useToast } from '../toast';
 
-const NICHES = ['Septic', 'Water/Mold', 'HVAC', 'Roofer', 'Plumber', 'Electrician', 'Towing', 'Real Estate'];
-const US_METRO_HINT = 102;  // size of the server's built-in metro sweep list (display hint)
+const NICHES = ['Septic', 'Water/Mold', 'HVAC', 'Roofer', 'Plumber', 'Electrician', 'Towing', 'Real Estate',
+  'Pest Control', 'Garage Door', 'Locksmith', 'Appliance Repair', 'Pool Service', 'Landscaping',
+  'Painter', 'Carpet Cleaning', 'Handyman', 'Tree Service',
+  'Fencing', 'Concrete', 'Moving', 'Junk Removal', 'Window Cleaning', 'Pressure Washing', 'Solar', 'Flooring'];
+const US_METRO_HINT = 189;  // size of the server's built-in metro sweep list (display hint)
 
 interface Recipient { name: string; city: string | null; email: string | null; owner: string | null; opener: string | null; verified: boolean }
 interface ScrapeResult {
@@ -36,12 +39,16 @@ export default function ScrapeSend() {
 
   /* DMARC authentication summary (deliverability health). */
   const [dmarc, setDmarc] = useState<{ passPct: number | null; totalMessages: number; reports: number } | null>(null);
+  /* Daily send-limit status. */
+  const [sendStatus, setSendStatus] = useState<{ sentToday: number; dailyCap: number; remaining: number; capReached: boolean; pending: number } | null>(null);
 
   useEffect(() => () => { if (poll.current) window.clearInterval(poll.current); stopRef.current = true; }, []);
   useEffect(() => { (async () => {
     const r = await api.get<{ summary: { passPct: number | null; totalMessages: number; reports: number } }>('/dmarc/summary');
     if (r.ok && r.data?.summary) setDmarc(r.data.summary);
-  })(); }, []);
+    const s = await api.get<{ sentToday: number; dailyCap: number; remaining: number; capReached: boolean; pending: number }>('/send-status');
+    if (s.ok && s.data) setSendStatus(s.data);
+  })(); }, [phase, status]);
 
   const startPolling = (campaignId: string) => {
     if (poll.current) window.clearInterval(poll.current);
@@ -140,6 +147,20 @@ export default function ScrapeSend() {
         )}
       </div>
       <div className="container">
+        {/* Daily send-limit status */}
+        {sendStatus && sendStatus.dailyCap > 0 && (
+          sendStatus.capReached ? (
+            <div className="callout danger" style={{ marginBottom: 14 }}>
+              <strong>⏸ Daily send limit reached — {sendStatus.sentToday}/{sendStatus.dailyCap} sent today.</strong>{' '}
+              {sendStatus.pending > 0 ? `${sendStatus.pending} queued email${sendStatus.pending === 1 ? '' : 's'} will resume automatically tomorrow.` : 'Sending resumes tomorrow.'} This protects your domain reputation during warm-up; the cap rises as you keep sending.
+            </div>
+          ) : (
+            <div className="callout" style={{ marginBottom: 14 }}>
+              <strong>{sendStatus.sentToday}/{sendStatus.dailyCap} sent today</strong> · {sendStatus.remaining} left in today’s safe limit{sendStatus.pending > 0 ? ` · ${sendStatus.pending} queued` : ''}.
+            </div>
+          )
+        )}
+
         {/* Step 1 — form */}
         <div className="panel">
           <div className="panel-head"><h2>1 · Who to reach</h2></div>

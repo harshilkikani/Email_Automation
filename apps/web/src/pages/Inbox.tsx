@@ -11,6 +11,12 @@ interface Reply {
   bookedDemo?: boolean;
 }
 
+interface Sent {
+  id: string; state: string; subject: string | null; body: string | null;
+  sentAt: string | null; step: number | null;
+  toName: string | null; toEmail: string | null; campaign: string | null;
+}
+
 const INTENTS = [
   'interested','conditional','objection',
   'not_interested_polite','not_interested_hostile',
@@ -32,6 +38,8 @@ const KEY_TO_INTENT: Record<string, string> = {
 export default function Inbox() {
   const t = useToast();
   const [rows, setRows] = useState<Reply[]>([]);
+  const [sent, setSent] = useState<Sent[]>([]);
+  const [view, setView] = useState<'sent' | 'replies'>('sent');
   const [filter, setFilter] = useState<string>('all');
   const [focusIdx, setFocusIdx] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -40,9 +48,16 @@ export default function Inbox() {
     const r = await api.get<{ rows: Reply[] }>('/inbound');
     if (r.ok && r.data) setRows(r.data.rows);
   };
-  useEffect(() => { refresh(); }, []);
+  const refreshSent = async () => {
+    const r = await api.get<{ rows: Sent[] }>('/sent');
+    if (r.ok && r.data) setSent(r.data.rows);
+  };
+  useEffect(() => { refresh(); refreshSent(); }, []);
 
+  const [sentFilter, setSentFilter] = useState('all');
   const filtered = useMemo(() => filter === 'all' ? rows : rows.filter(r => (r.manualIntent ?? r.autoIntent ?? 'unknown') === filter), [rows, filter]);
+  const sentFiltered = useMemo(() => sentFilter === 'all' ? sent : sent.filter(s => s.state === sentFilter), [sent, sentFilter]);
+  const SENT_STATES = ['sent', 'delivered', 'bounced', 'replied', 'failed'];
 
   const setIntent = async (id: string, intent: string) => {
     const r = await api.patch(`/inbound/${id}`, { manualIntent: intent, triaged: true });
@@ -64,6 +79,7 @@ export default function Inbox() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (view !== 'replies') return;   // reply-triage shortcuts only apply to replies
       const k = e.key.toLowerCase();
       const current = filtered[focusIdx];
       if (k === 'j') { setFocusIdx(i => Math.min(filtered.length - 1, i + 1)); return; }
@@ -80,26 +96,43 @@ export default function Inbox() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [filtered, focusIdx]);
+  }, [filtered, focusIdx, view]);
 
   return (
     <div className="split">
       <aside className="sidebar">
-        <div className="sb-section">
-          <div className="sb-label"><span>Intent</span></div>
-          <button className={'fb' + (filter === 'all' ? ' on' : '')} onClick={() => setFilter('all')}>
-            <span className="fb-row">All</span><span className="ct">{rows.length}</span>
-          </button>
-          {INTENTS.map(i => {
-            const count = rows.filter(r => (r.manualIntent ?? r.autoIntent ?? 'unknown') === i).length;
-            return (
-              <button key={i} className={'fb' + (filter === i ? ' on' : '')} onClick={() => setFilter(i)}>
-                <span className="fb-row">{i}</span><span className="ct">{count}</span>
-              </button>
-            );
-          })}
-        </div>
-        <div className="sb-section">
+        {view === 'sent' ? (
+          <div className="sb-section">
+            <div className="sb-label"><span>Status</span></div>
+            <button className={'fb' + (sentFilter === 'all' ? ' on' : '')} onClick={() => setSentFilter('all')}>
+              <span className="fb-row">All</span><span className="ct">{sent.length}</span>
+            </button>
+            {SENT_STATES.map(st => {
+              const count = sent.filter(s => s.state === st).length;
+              return (
+                <button key={st} className={'fb' + (sentFilter === st ? ' on' : '')} onClick={() => setSentFilter(st)}>
+                  <span className="fb-row">{st}</span><span className="ct">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="sb-section">
+            <div className="sb-label"><span>Intent</span></div>
+            <button className={'fb' + (filter === 'all' ? ' on' : '')} onClick={() => setFilter('all')}>
+              <span className="fb-row">All</span><span className="ct">{rows.length}</span>
+            </button>
+            {INTENTS.map(i => {
+              const count = rows.filter(r => (r.manualIntent ?? r.autoIntent ?? 'unknown') === i).length;
+              return (
+                <button key={i} className={'fb' + (filter === i ? ' on' : '')} onClick={() => setFilter(i)}>
+                  <span className="fb-row">{i}</span><span className="ct">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div className="sb-section" style={{ display: view === 'replies' ? undefined : 'none' }}>
           <div className="sb-label"><span>Shortcuts</span></div>
           <div style={{ padding: '0 9px', fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.7 }}>
             <div>j / k — next / prev</div>
@@ -120,9 +153,38 @@ export default function Inbox() {
       <div className="content">
         <div className="tbl-wrap">
           <div className="tbl-head">
-            <h3>Inbox</h3>
-            <span className="tbl-meta">{filtered.length} replies · {filtered[focusIdx]?.fromEmail ? `focused: ${filtered[focusIdx]?.fromEmail}` : 'no focus'}</span>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button className={'btn btn-xs ' + (view === 'sent' ? 'btn-primary' : 'btn-secondary')} onClick={() => setView('sent')}>Sent ({sent.length})</button>
+              <button className={'btn btn-xs ' + (view === 'replies' ? 'btn-primary' : 'btn-secondary')} onClick={() => setView('replies')}>Replies ({rows.length})</button>
+            </div>
+            <span className="tbl-meta">{view === 'sent' ? `${sent.length} sent` : `${filtered.length} replies`}</span>
           </div>
+
+          {view === 'sent' && (
+            <div>
+              {sent.length === 0 && <div className="empty"><div className="e-ico">✉</div><div className="e-title">No sent emails yet</div><div className="e-sub">Send a batch from Scrape &amp; Send — copies appear here (and in your mailbox Sent folder).</div></div>}
+              {sent.length > 0 && sentFiltered.length === 0 && <div className="empty"><div className="e-ico">✉</div><div className="e-title">No {sentFilter} emails</div></div>}
+              {sentFiltered.map(s => (
+                <div className="panel" key={s.id} style={{ margin: 14 }}>
+                  <div className="panel-head" style={{ marginBottom: 8, paddingBottom: 8 }}>
+                    <h2>{s.subject || '(no subject)'}</h2>
+                    <span className="tbl-meta">{s.sentAt ? new Date(s.sentAt).toLocaleString() : ''}</span>
+                  </div>
+                  <div className="cc-meta" style={{ marginBottom: 10 }}>
+                    <span>To: <strong>{s.toName || s.toEmail}</strong>{s.toName ? ` <${s.toEmail}>` : ''}</span>
+                    <span>· <span className={'pill ' + (s.state === 'bounced' ? 'bounced' : s.state === 'delivered' ? 'booked' : '')}>{s.state}</span></span>
+                    {s.step != null && s.step > 1 && <span>· follow-up #{s.step - 1}</span>}
+                    {s.campaign && <span>· {s.campaign}</span>}
+                  </div>
+                  <div className="preview-box" style={{ maxHeight: 260 }}>
+                    <div className="preview-body" style={{ whiteSpace: 'pre-wrap' }}>{s.body ?? '(body not stored for this send)'}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {view === 'replies' && <>
           {filtered.length === 0 && <div className="empty"><div className="e-ico">✉</div><div className="e-title">No replies match</div></div>}
           <div ref={listRef}>
             {filtered.map((r, idx) => (
@@ -152,6 +214,7 @@ export default function Inbox() {
               </div>
             ))}
           </div>
+          </>}
         </div>
       </div>
     </div>

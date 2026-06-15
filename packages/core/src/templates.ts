@@ -269,6 +269,13 @@ export function defaultTemplateFor(niche: Niche): Template {
     Roofer: 'roofer', Septic: 'septic', 'Water/Mold': 'water', HVAC: 'hvac',
     Plumber: 'plumber', Electrician: 'electrician', Towing: 'towing',
     'Real Estate': 'real-estate',
+    /* New trades use the niche-agnostic GENERAL template (missed-call angle
+       works for every inbound local-service business). */
+    'Pest Control': 'general', 'Garage Door': 'general', Locksmith: 'general',
+    'Appliance Repair': 'general', 'Pool Service': 'general', Landscaping: 'general',
+    Painter: 'general', 'Carpet Cleaning': 'general', Handyman: 'general', 'Tree Service': 'general',
+    Fencing: 'general', Concrete: 'general', Moving: 'general', 'Junk Removal': 'general',
+    'Window Cleaning': 'general', 'Pressure Washing': 'general', Solar: 'general', Flooring: 'general',
   };
   return TEMPLATES[niche2key[niche]] ?? GENERAL;
 }

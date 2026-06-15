@@ -23,7 +23,7 @@ import { getAiAdapter } from './ai.js';
 import { getConfig } from '../config.js';
 import { obs } from '../observability.js';
 
-const PRODUCT = 'a 24/7 AI receptionist that answers every call and books the job';
+const PRODUCT = 'custom-built solutions for local businesses — websites, online booking, automated review systems, and 24/7 AI phone agents — each matched to the specific gap holding that business back';
 const BATCH = 25;
 
 /** Generate + store a personalized opener for one lead. Returns the opener or null. */
