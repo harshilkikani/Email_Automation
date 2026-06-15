@@ -43,11 +43,12 @@ function baseDomain() {
 function baseCamp() { return { id: 'c', orgId: 'o', name: 'test', recipientCount: 100, status: 'draft' } as any; }
 
 describe('canSend hard blockers', () => {
-  it('blocks when production access not confirmed', () => {
+  it('blocks when production access not confirmed (SES provider only)', () => {
     const o = baseOrg(); o.productionAccessConfirmed = false;
     const r = canSend({ org: o, domain: baseDomain(), campaign: baseCamp(),
       stats: { sent: 0, bounced: 0, complained: 0 },
-      bouncePausePct: 4, complaintPausePct: 0.1, unsubscribeReachable: true });
+      bouncePausePct: 4, complaintPausePct: 0.1, unsubscribeReachable: true,
+      requireSesProductionAccess: true });
     expect(r.blockers.some(b => b.code === 'no_production_access')).toBe(true);
   });
   it('blocks when unsubscribe endpoint unreachable', () => {

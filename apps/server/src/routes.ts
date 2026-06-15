@@ -14,7 +14,7 @@ import {
 import { classifyPhone } from '@keres/providers';
 import { getConfig } from './config.js';
 import { runDiscovery } from './services/discovery.js';
-import { quickScrape, quickFromLicenses, quickStatus } from './services/quick.js';
+import { quickScrape, quickFromLicenses, quickStatus, quickSweep, quickGet, quickPoolStage, US_METROS } from './services/quick.js';
 import {
   createCampaign, buildRecipients, renderPreview,
 } from './services/campaigns.js';
@@ -337,6 +337,23 @@ export function registerRoutes(app: FastifyInstance) {
     return { ok: true, ...r };
   });
 
+  /* Primary flow: "Get N leads anywhere" — niche only, no city/state. */
+  app.post('/api/quick/get', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niche?: string; count?: number; followups?: number; stepDelayDays?: number };
+    if (!b.niche) return { ok: false, error: 'missing_niche' };
+    let r;
+    try {
+      r = await quickGet(getDb(), {
+        orgId, niche: b.niche as 'Septic', count: b.count, followups: b.followups, stepDelayDays: b.stepDelayDays,
+      });
+    } catch (e: any) {
+      return { ok: false, error: 'discovery_failed', detail: e?.message ?? String(e) };
+    }
+    await writeAudit('quick_get', r.campaignId, { niche: b.niche, found: r.found, inserted: r.inserted, pool: r.recipientCount }, req);
+    return { ok: true, ...r };
+  });
+
   /* Scrape & Send from imported state-license lists (free niche data). */
   app.post('/api/quick/from-licenses', async (req) => {
     const orgId = await singleOrgId();
@@ -373,6 +390,77 @@ export function registerRoutes(app: FastifyInstance) {
     const id = (req.query as { campaignId?: string }).campaignId;
     if (!id) return { ok: false, error: 'missing_campaignId' };
     return { ok: true, ...(await quickStatus(getDb(), id)) };
+  });
+
+  /* Mass mode: niche-only auto-sweep of US metros into one growing lead pool.
+     Each call handles a small batch; the client loops through US_METROS,
+     showing live progress as the pool fills. No city/state typing. */
+  app.post('/api/quick/sweep', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niche?: string; cursor?: number; batch?: number; perMetro?: number };
+    if (!b.niche) return { ok: false, error: 'missing_niche' };
+    try {
+      const r = await quickSweep(getDb(), {
+        orgId, niche: b.niche as 'Septic',
+        cursor: b.cursor, batch: b.batch, perMetro: b.perMetro,
+      });
+      return { ok: true, ...r };
+    } catch (e: any) {
+      return { ok: false, error: 'sweep_failed', detail: e?.message ?? String(e) };
+    }
+  });
+
+  app.get('/api/quick/sweep/metros', async () => ({ ok: true, total: US_METROS.length, metros: US_METROS }));
+
+  /* DMARC authentication summary (parsed from the rua= reports in the mailbox). */
+  app.get('/api/dmarc/summary', async () => {
+    const { dmarcSummary } = await import('./services/dmarc-processor.js');
+    const recent = await getDb().select().from(schema.dmarcReports)
+      .orderBy(desc(schema.dmarcReports.createdAt)).limit(10);
+    return { ok: true, summary: await dmarcSummary(getDb()), recent };
+  });
+
+  /* Re-run personalization for the whole pool — regenerates every lead's opener
+     + body with the current templates. Use after a template/logic change so
+     existing leads pick up the new varied copy (sends read the stored body). */
+  app.post('/api/admin/repersonalize', async (req) => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { limit?: number };
+    const ids = await db.select({ id: schema.leadSignals.leadId })
+      .from(schema.leadSignals)
+      .innerJoin(schema.leads, eq(schema.leads.id, schema.leadSignals.leadId))
+      .where(and(eq(schema.leads.orgId, orgId), isNull(schema.leads.deletedAt)))
+      .limit(Math.min(b.limit ?? 5000, 5000));
+    let regenerated = 0, skipped = 0;
+    for (const { id } of ids) {
+      try { (await personalizeLead(db, id)) ? regenerated++ : skipped++; }
+      catch { skipped++; }
+    }
+    await writeAudit('repersonalize', orgId, { regenerated, skipped, total: ids.length }, req);
+    return { ok: true, regenerated, skipped, total: ids.length };
+  });
+
+  /* Mass send: stage a campaign over the ENTIRE verified pool for a niche and
+     launch it through the full gate. The scheduler drips it within caps/warmup. */
+  app.post('/api/quick/send-all', async (req) => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niche?: string; followups?: number; stepDelayDays?: number; override?: { reason: string } };
+    if (!b.niche) return { ok: false, error: 'missing_niche' };
+    const staged = await quickPoolStage(db, {
+      orgId, niche: b.niche as 'Septic', followups: b.followups, stepDelayDays: b.stepDelayDays,
+    });
+    if (staged.recipientCount === 0) return { ok: false, error: 'empty_pool', ...staged };
+    const gate = await evaluateLaunchGate(db, {
+      campaignId: staged.campaignId, bouncePausePct: cfg.bouncePausePct,
+      complaintPausePct: cfg.complaintPausePct, seedlistTtlHours: 24 * 7,
+    });
+    if (!gate.ok && !b.override?.reason) return { ok: false, gate, ...staged };
+    await db.update(schema.campaigns).set({ status: 'running', launchedAt: new Date() })
+      .where(eq(schema.campaigns.id, staged.campaignId));
+    await writeAudit('quick_send_all', staged.campaignId, { niche: b.niche, recipients: staged.recipientCount, overridden: !!b.override?.reason }, req);
+    return { ok: true, ...staged };
   });
 
   /* ────────────── Leads ────────────── */

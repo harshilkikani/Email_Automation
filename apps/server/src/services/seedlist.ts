@@ -15,6 +15,7 @@ import { schema } from '@keres/db';
 import { buildHeaders, renderRawMessage, canSpamFooter, signUnsubscribeToken, unsubscribeUrl } from '@keres/email';
 import { getConfig } from '../config.js';
 import { getOutbound } from './sender-factory.js';
+import { saveToSentFolder } from './imap-client.js';
 
 export interface SeedlistResult {
   ok: boolean;
@@ -88,6 +89,9 @@ export async function sendSeedlistTest(
         configurationSet: cfg.ses.configurationSet,
       });
       sent++;
+      if (cfg.imap.saveToSent && cfg.imap.user && cfg.imap.pass) {
+        await saveToSentFolder(cfg.imap, raw).catch(() => undefined);
+      }
       if (seedRow) {
         await db.update(schema.seedlistTests)
           .set({ providerMessageId: out.providerMessageId })

@@ -12,7 +12,7 @@ import {
 } from '@keres/core';
 import { scoreLeadEnhanced } from './scoring.js';
 import {
-  OsmAdapter, OsmSampleAdapter, PlacesAdapter, FoursquareAdapter, type DiscoveryProvider,
+  OsmAdapter, OsmSampleAdapter, PlacesAdapter, FoursquareAdapter, WebSearchAdapter, type DiscoveryProvider,
   YelpAdapter, Scraper, classifyPhone, LicenseRegistry,
 } from '@keres/providers';
 import { getVerifier } from './verify.js';
@@ -54,9 +54,11 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
      loop below via the dedupe index. */
   const places = new PlacesAdapter({ enabled: cfg.places.enabled && !cfg.sampleMode, apiKey: cfg.places.apiKey });
   const foursquare = new FoursquareAdapter({ enabled: cfg.foursquare.enabled && !cfg.sampleMode, apiKey: cfg.foursquare.apiKey, baseUrl: cfg.foursquare.baseUrl, apiVersion: cfg.foursquare.apiVersion });
+  const websearch = new WebSearchAdapter({ enabled: cfg.websearch.enabled && !cfg.sampleMode, userAgent: cfg.osm.userAgent, braveApiKey: cfg.websearch.braveApiKey || undefined });
   const sources: DiscoveryProvider[] = [];
   if (places.isEnabled()) sources.push(places);
   if (foursquare.isEnabled()) sources.push(foursquare);
+  if (websearch.isEnabled()) sources.push(websearch);   // free, best-effort
   sources.push(osm);   // free, always (sample adapter in sample mode)
 
   const want = input.targetCount * 2;

@@ -30,11 +30,16 @@ interface OsmElement {
   tags?: Record<string, string>;
 }
 
+/** Geographic bounding box: [south, west, north, east] in decimal degrees. */
+export type BBox = [number, number, number, number];
+
 export interface OsmAdapterConfig {
   endpoint: string;
   userAgent: string;
   enabled: boolean;
   fetcher?: (q: string) => Promise<OsmElement[]>;   // for tests / sample mode
+  /** City→bbox geocoder seam. Default uses Nominatim. */
+  geocoder?: (city: string, state: string) => Promise<BBox | null>;
 }
 
 export class OsmAdapter implements DiscoveryProvider {
@@ -45,7 +50,25 @@ export class OsmAdapter implements DiscoveryProvider {
 
   async search(q: DiscoveryQuery): Promise<DiscoveryResult> {
     const fetcher = this.cfg.fetcher ?? this.realFetch.bind(this);
-    const body = buildOverpass(q);
+    /* Geocode the city to a bounding box first. The old area["name"=City]
+       boundary lookup silently returns 0 for tons of US cities (the admin
+       boundary name/level doesn't match), which is why OSM "found nothing".
+       A bbox around the city actually surfaces the businesses. Fall back to
+       the area approach only if geocoding fails. */
+    let bbox: BBox | null = null;
+    /* Use the real geocoder only when not under an injected fetcher (tests/sample
+       mode), unless a geocoder seam is explicitly provided. */
+    const geocode = this.cfg.geocoder ?? (this.cfg.fetcher ? null : this.realGeocode.bind(this));
+    if (geocode) {
+      try { bbox = await geocode(q.city, q.state); }
+      catch { /* fall back to area query */ }
+    }
+    /* Expand the city bbox outward to the surrounding metro (~16km) so suburbs
+       and edge-of-town businesses are included — the city proper alone misses a
+       large share of real service businesses. */
+    if (bbox) bbox = padBbox(bbox, 0.15);
+
+    const body = buildOverpass(q, bbox ?? undefined);
     const elements = await fetcher(body);
     const candidates = elements
       .map(e => elementToCandidate(e, q))
@@ -56,6 +79,27 @@ export class OsmAdapter implements DiscoveryProvider {
       source: 'osm',
       attribution: '© OpenStreetMap contributors',
     };
+  }
+
+  /** Nominatim geocode: "City, State, USA" → bbox. Free, ≤1 req/s + UA. */
+  private async realGeocode(city: string, state: string): Promise<BBox | null> {
+    const url = `https://nominatim.openstreetmap.org/search?${new URLSearchParams({
+      q: `${city}, ${state}, USA`, format: 'jsonv2', limit: '1', countrycodes: 'us',
+    })}`;
+    const res = await request(url, {
+      method: 'GET',
+      headers: { 'User-Agent': this.cfg.userAgent, Accept: 'application/json' },
+      headersTimeout: 10_000,
+      bodyTimeout: 12_000,
+    });
+    if (res.statusCode >= 400) return null;
+    const arr = (await res.body.json()) as Array<{ boundingbox?: [string, string, string, string] }>;
+    const bb = arr?.[0]?.boundingbox;
+    if (!bb || bb.length !== 4) return null;
+    /* Nominatim order = [south, north, west, east]; our BBox = [south, west, north, east]. */
+    const [south, north, west, east] = bb.map(Number) as [number, number, number, number];
+    if ([south, north, west, east].some(n => Number.isNaN(n))) return null;
+    return [south, west, north, east];
   }
 
   private async realFetch(body: string): Promise<OsmElement[]> {
@@ -78,8 +122,26 @@ export class OsmAdapter implements DiscoveryProvider {
   }
 }
 
-export function buildOverpass(q: DiscoveryQuery): string {
+/** Expand a [south, west, north, east] box by `deg` on every side. */
+function padBbox(b: BBox, deg: number): BBox {
+  return [
+    Math.max(-90, b[0] - deg), Math.max(-180, b[1] - deg),
+    Math.min(90, b[2] + deg), Math.min(180, b[3] + deg),
+  ];
+}
+
+export function buildOverpass(q: DiscoveryQuery, bbox?: BBox): string {
   const filters = NICHE_TO_OSM[q.niche] ?? `nwr["name"~"${q.niche}",i]({{area}});`;
+  if (bbox) {
+    /* Query directly within the geocoded bounding box — reliable, unlike the
+       area-name boundary lookup. Overpass bbox order = (south,west,north,east). */
+    const bb = `(${bbox[0]},${bbox[1]},${bbox[2]},${bbox[3]})`;
+    return `[out:json][timeout:25];
+(
+${filters.replace(/\{\{area\}\}/g, bb)}
+);
+out body center tags;`;
+  }
   return `[out:json][timeout:25];
 area["name"~"^${q.city}$",i]["admin_level"~"8|7|6"]->.searchArea;
 (
@@ -92,10 +154,14 @@ function elementToCandidate(e: OsmElement, q: DiscoveryQuery): LeadCandidate | n
   const tags = e.tags ?? {};
   const name = tags['name'];
   if (!name) return null;
-  const phone = tags['contact:phone'] ?? tags['phone'];
-  if (!phone) return null;
+  const phone = tags['contact:phone'] ?? tags['phone'] ?? null;
   const website = tags['website'] ?? tags['contact:website'] ?? null;
   const email = tags['email'] ?? tags['contact:email'] ?? null;
+  /* Keep anything we can actually act on: a website (scrape for email), a
+     direct email, or a phone. Dropping website-only records (no phone tag)
+     was throwing away the best leads — those are exactly the ones we can
+     scrape an owner email from. */
+  if (!website && !email && !phone) return null;
   const street = [tags['addr:housenumber'], tags['addr:street']].filter(Boolean).join(' ');
   const cityTag = tags['addr:city'] ?? q.city;
   const stateTag = tags['addr:state'] ?? q.state;

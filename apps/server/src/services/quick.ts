@@ -118,6 +118,164 @@ async function stageAndReview(
   };
 }
 
+/* ────────────── Mass mode: niche-only auto-sweep + send to the whole pool ──────────────
+ *
+ * Instead of typing a city each time, the operator picks a niche and the system
+ * sweeps a built-in list of US metros, accumulating every business it finds into
+ * one growing lead pool. Each request handles a small batch of metros (discovery
+ * enriches each lead inline — site crawl + owner-find + MX-verify — so we keep
+ * batches small and let the client loop through the list, showing live progress).
+ * Then one "Send to all" stages a campaign over the whole verified pool and the
+ * normal drip (caps + warmup + send window) takes it from there. */
+
+/** Built-in metro sweep list — broad US coverage so a niche-only search finds a lot. */
+export const US_METROS: Array<{ city: string; state: string }> = [
+  { city: 'New York', state: 'NY' }, { city: 'Los Angeles', state: 'CA' }, { city: 'Chicago', state: 'IL' },
+  { city: 'Houston', state: 'TX' }, { city: 'Phoenix', state: 'AZ' }, { city: 'Philadelphia', state: 'PA' },
+  { city: 'San Antonio', state: 'TX' }, { city: 'San Diego', state: 'CA' }, { city: 'Dallas', state: 'TX' },
+  { city: 'Austin', state: 'TX' }, { city: 'San Jose', state: 'CA' }, { city: 'Fort Worth', state: 'TX' },
+  { city: 'Jacksonville', state: 'FL' }, { city: 'Columbus', state: 'OH' }, { city: 'Charlotte', state: 'NC' },
+  { city: 'Indianapolis', state: 'IN' }, { city: 'San Francisco', state: 'CA' }, { city: 'Seattle', state: 'WA' },
+  { city: 'Denver', state: 'CO' }, { city: 'Nashville', state: 'TN' }, { city: 'Oklahoma City', state: 'OK' },
+  { city: 'El Paso', state: 'TX' }, { city: 'Washington', state: 'DC' }, { city: 'Boston', state: 'MA' },
+  { city: 'Las Vegas', state: 'NV' }, { city: 'Portland', state: 'OR' }, { city: 'Detroit', state: 'MI' },
+  { city: 'Memphis', state: 'TN' }, { city: 'Louisville', state: 'KY' }, { city: 'Milwaukee', state: 'WI' },
+  { city: 'Baltimore', state: 'MD' }, { city: 'Albuquerque', state: 'NM' }, { city: 'Tucson', state: 'AZ' },
+  { city: 'Fresno', state: 'CA' }, { city: 'Sacramento', state: 'CA' }, { city: 'Kansas City', state: 'MO' },
+  { city: 'Mesa', state: 'AZ' }, { city: 'Atlanta', state: 'GA' }, { city: 'Omaha', state: 'NE' },
+  { city: 'Colorado Springs', state: 'CO' }, { city: 'Raleigh', state: 'NC' }, { city: 'Virginia Beach', state: 'VA' },
+  { city: 'Miami', state: 'FL' }, { city: 'Oakland', state: 'CA' }, { city: 'Minneapolis', state: 'MN' },
+  { city: 'Tulsa', state: 'OK' }, { city: 'Tampa', state: 'FL' }, { city: 'Arlington', state: 'TX' },
+  { city: 'New Orleans', state: 'LA' }, { city: 'Wichita', state: 'KS' }, { city: 'Cleveland', state: 'OH' },
+  { city: 'Charleston', state: 'SC' }, { city: 'Orlando', state: 'FL' }, { city: 'St. Louis', state: 'MO' },
+  { city: 'Pittsburgh', state: 'PA' }, { city: 'Cincinnati', state: 'OH' }, { city: 'Salt Lake City', state: 'UT' },
+  { city: 'Richmond', state: 'VA' }, { city: 'Boise', state: 'ID' }, { city: 'Des Moines', state: 'IA' },
+  // ── extended coverage (mid-size metros) ──
+  { city: 'Bakersfield', state: 'CA' }, { city: 'Aurora', state: 'CO' }, { city: 'Anaheim', state: 'CA' },
+  { city: 'Riverside', state: 'CA' }, { city: 'Corpus Christi', state: 'TX' }, { city: 'Lexington', state: 'KY' },
+  { city: 'Henderson', state: 'NV' }, { city: 'Stockton', state: 'CA' }, { city: 'Saint Paul', state: 'MN' },
+  { city: 'Greensboro', state: 'NC' }, { city: 'Plano', state: 'TX' }, { city: 'Lincoln', state: 'NE' },
+  { city: 'Buffalo', state: 'NY' }, { city: 'Fort Wayne', state: 'IN' }, { city: 'Jersey City', state: 'NJ' },
+  { city: 'Durham', state: 'NC' }, { city: 'Madison', state: 'WI' }, { city: 'Lubbock', state: 'TX' },
+  { city: 'Winston-Salem', state: 'NC' }, { city: 'Garland', state: 'TX' }, { city: 'Glendale', state: 'AZ' },
+  { city: 'Reno', state: 'NV' }, { city: 'Chandler', state: 'AZ' }, { city: 'Norfolk', state: 'VA' },
+  { city: 'Birmingham', state: 'AL' }, { city: 'Rochester', state: 'NY' }, { city: 'Scottsdale', state: 'AZ' },
+  { city: 'Irving', state: 'TX' }, { city: 'Spokane', state: 'WA' }, { city: 'Knoxville', state: 'TN' },
+  { city: 'Akron', state: 'OH' }, { city: 'Little Rock', state: 'AR' }, { city: 'Grand Rapids', state: 'MI' },
+  { city: 'Mobile', state: 'AL' }, { city: 'Shreveport', state: 'LA' }, { city: 'Tallahassee', state: 'FL' },
+  { city: 'Huntsville', state: 'AL' }, { city: 'Chattanooga', state: 'TN' }, { city: 'Fort Lauderdale', state: 'FL' },
+  { city: 'Dayton', state: 'OH' }, { city: 'Spokane Valley', state: 'WA' }, { city: 'Savannah', state: 'GA' },
+];
+
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(n, hi));
+
+export interface SweepInput {
+  orgId: string;
+  niche: Niche;
+  /** Index into US_METROS to start from (for the client's loop). */
+  cursor?: number;
+  /** Metros to process this request (kept small — discovery enriches inline). */
+  batch?: number;
+  /** Target leads per metro. */
+  perMetro?: number;
+}
+
+export interface SweepResult {
+  added: number;            // new leads inserted this batch
+  foundThisBatch: number;   // businesses discovery returned this batch
+  metrosSwept: string[];    // "City, ST" handled this batch
+  cursor: number;           // where this batch started
+  nextCursor: number | null;// next index, or null when the whole list is done
+  done: boolean;
+  totalMetros: number;
+  poolCount: number;        // sendable (verified, uncontacted) leads for this niche
+}
+
+/** Sweep one small batch of metros for a niche, accumulating leads into the pool. */
+export async function quickSweep(db: Database, input: SweepInput): Promise<SweepResult> {
+  const batch = clamp(input.batch ?? 2, 1, 6);
+  const perMetro = clamp(input.perMetro ?? 8, 1, 25);
+  const start = clamp(input.cursor ?? 0, 0, US_METROS.length);
+  const slice = US_METROS.slice(start, start + batch);
+
+  let added = 0, found = 0;
+  const metrosSwept: string[] = [];
+  for (const m of slice) {
+    metrosSwept.push(`${m.city}, ${m.state}`);
+    try {
+      const r = await runDiscovery(db, {
+        orgId: input.orgId, niche: input.niche, city: m.city, state: m.state, targetCount: perMetro,
+      });
+      added += r.inserted; found += r.found;
+    } catch { /* one metro failing (timeout/empty) shouldn't stop the sweep */ }
+  }
+
+  const nextIdx = start + slice.length;
+  const done = nextIdx >= US_METROS.length;
+  /* Pool = everything sendable & uncontacted for this niche, across all cities. */
+  const { leadIds } = await resolveAudience(db, input.orgId, { niche: input.niche, status: 'uncontacted' });
+
+  return {
+    added, foundThisBatch: found, metrosSwept,
+    cursor: start, nextCursor: done ? null : nextIdx, done,
+    totalMetros: US_METROS.length,
+    poolCount: leadIds.length,
+  };
+}
+
+/**
+ * Primary flow: "Get N leads anywhere." Niche only — no city/state. Picks a
+ * RANDOM starting metro and pulls from a few cities until ~N new businesses land
+ * in the pool (random start + per-org dedupe means repeat clicks explore new
+ * cities instead of re-scraping the same one). Stages a review over the whole
+ * uncontacted pool so the operator can eyeball the batch and send (drip-safe).
+ */
+export async function quickGet(db: Database, input: {
+  orgId: string; niche: Niche; count?: number; followups?: number; stepDelayDays?: number;
+}): Promise<QuickScrapeResult> {
+  const target = clamp(input.count ?? 15, 5, 50);
+  /* Per-site enrichment (crawl + owner-find + MX-verify) dominates latency, so
+     bound the whole batch by a wall-clock budget — a click is always snappy,
+     and yields "up to N" (click again for more). Small perMetro keeps each
+     metro short so we can sample several. */
+  const perMetro = 6;
+  const maxMetros = 6;
+  const BUDGET_MS = 30_000;
+  const start = Math.floor(Math.random() * US_METROS.length);
+  const t0 = Date.now();
+
+  let added = 0, found = 0;
+  for (let k = 0; k < maxMetros && added < target; k++) {
+    if (Date.now() - t0 > BUDGET_MS) break;        // keep the request snappy
+    const m = US_METROS[(start + k) % US_METROS.length]!;
+    try {
+      const r = await runDiscovery(db, {
+        orgId: input.orgId, niche: input.niche, city: m.city, state: m.state, targetCount: perMetro,
+      });
+      added += r.inserted; found += r.found;
+    } catch { /* one metro failing shouldn't abort the batch */ }
+  }
+
+  const qi: QuickScrapeInput = {
+    orgId: input.orgId, niche: input.niche, city: '', state: '', count: target,
+    followups: input.followups, stepDelayDays: input.stepDelayDays,
+  };
+  return stageAndReview(db, qi, `${input.niche} — anywhere`,
+    { niche: input.niche, status: 'uncontacted' }, found, added);
+}
+
+/** Stage a campaign over the ENTIRE verified, uncontacted pool for a niche. */
+export async function quickPoolStage(db: Database, input: {
+  orgId: string; niche: Niche; followups?: number; stepDelayDays?: number;
+}): Promise<QuickScrapeResult> {
+  const qi: QuickScrapeInput = {
+    orgId: input.orgId, niche: input.niche, city: '', state: '', count: 0,
+    followups: input.followups, stepDelayDays: input.stepDelayDays,
+  };
+  return stageAndReview(db, qi, `${input.niche} — entire pool`,
+    { niche: input.niche, status: 'uncontacted' }, 0, 0);
+}
+
 /** Live sending progress for a campaign (for the simple UI's progress view). */
 export async function quickStatus(db: Database, campaignId: string): Promise<{
   status: string | null; total: number; sent: number; failed: number; pending: number;

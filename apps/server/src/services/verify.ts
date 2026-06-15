@@ -6,11 +6,14 @@
  */
 import dns from 'node:dns/promises';
 import { FreeVerifier, type VerificationProvider } from '@keres/providers';
+import { getConfig } from '../config.js';
+import { smtpRcptProbe } from './smtp-probe.js';
 
 let _verifier: VerificationProvider | null = null;
 
 export function getVerifier(): VerificationProvider {
   if (_verifier) return _verifier;
+  const cfg = getConfig();
   _verifier = new FreeVerifier({
     resolveMx: async (domain: string) => {
       try {
@@ -20,7 +23,15 @@ export function getVerifier(): VerificationProvider {
         return [];
       }
     },
-    enableSmtp: false,   // MX-level only — free, no mailbox probing
+    /* Free SMTP RCPT probe — confirms the mailbox exists (port 25 works from Fly)
+       so non-existent addresses are caught as `invalid` before they bounce.
+       Big free providers are skipped inside the verifier. */
+    enableSmtp: cfg.verify.smtpProbe && !cfg.sampleMode,
+    smtpProbe: (email, mx) => smtpRcptProbe(email, mx, {
+      fromDomain: cfg.org.outreachSubdomain || 'keresai.com',
+      fromEmail: cfg.org.fromEmail || cfg.smtp.fromEmail || 'postmaster@keresai.com',
+      timeoutMs: cfg.verify.smtpTimeoutMs,
+    }),
   });
   return _verifier;
 }

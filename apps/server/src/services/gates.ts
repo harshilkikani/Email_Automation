@@ -24,6 +24,9 @@ export interface GateInput {
   bouncePausePct: number;
   complaintPausePct: number;
   unsubscribeReachable: boolean;
+  /** SES production access is an SES-only requirement; only enforce it when the
+      outbound provider is SES. SMTP/Mailgun/Resend senders never have it. */
+  requireSesProductionAccess?: boolean;
 }
 
 export interface GateResult {
@@ -42,7 +45,7 @@ export function canSend(input: GateInput): GateResult {
   if (!input.org.fromName || !input.org.fromEmail || !input.org.replyTo) {
     blockers.push({ code: 'incomplete_sender_identity', message: 'From name, From email, and Reply-To are all required.' });
   }
-  if (!input.org.productionAccessConfirmed) {
+  if (input.requireSesProductionAccess && !input.org.productionAccessConfirmed) {
     blockers.push({ code: 'no_production_access', message: 'SES production access has not been confirmed. Open the request ticket in AWS, then toggle the setting.' });
   }
 

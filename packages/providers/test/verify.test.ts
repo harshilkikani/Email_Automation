@@ -14,7 +14,7 @@ describe('FreeVerifier', () => {
   });
   it('marks Gmail as unverifiable_provider', async () => {
     const v = new FreeVerifier({ resolveMx: async () => ['gmail-smtp-in.l.google.com'] });
-    const r = await v.verify('user@gmail.com');
+    const r = await v.verify('jsmith@gmail.com');
     expect(r.status).toBe('unverifiable_provider');
   });
   it('returns invalid when no MX records', async () => {

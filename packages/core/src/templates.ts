@@ -339,7 +339,12 @@ export function stableHash(seed: string): bigint {
     h ^= BigInt(seed.charCodeAt(i));
     h = (h * 1099511628211n) & 0xffffffffffffffffn;
   }
-  return h;
+  /* Mask to 63 bits so the value always fits a SIGNED 64-bit Postgres `bigint`
+     (max 9.2e18). Unmasked FNV-1a is unsigned 64-bit (max 1.8e19), so ~half of
+     all values overflowed `campaign_recipients.variant_seed` — the INSERT threw
+     AFTER the email had already been sent, mis-marking delivered mail as
+     "failed" (which then retried → duplicate sends). */
+  return h & 0x7fffffffffffffffn;
 }
 
 function pickByHash<T>(arr: T[], seed: bigint): T {

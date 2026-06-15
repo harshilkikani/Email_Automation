@@ -260,9 +260,13 @@ export async function gateCampaign(db: Database, campaignId: string, ctx: Launch
   if (!camp) return { ok: false, blockers: [{ code: 'no_campaign', message: 'Campaign not found' }], warnings: [] };
   const org = (await db.select().from(schema.organizations).where(eq(schema.organizations.id, camp.orgId)).limit(1))[0];
   if (!org) return { ok: false, blockers: [{ code: 'no_org', message: 'Org not found' }], warnings: [] };
-  const domain = camp.senderDomainId
-    ? (await db.select().from(schema.senderDomains).where(eq(schema.senderDomains.id, camp.senderDomainId)).limit(1))[0] ?? null
-    : null;
+  /* Mirror the launch gate: when the campaign has no explicit sender domain,
+     fall back to the org's first registered domain so the same DNS/warmup
+     checks apply (otherwise auto-pause would block every quick campaign with
+     `no_sender_domain`). */
+  const domain = (camp.senderDomainId
+    ? (await db.select().from(schema.senderDomains).where(eq(schema.senderDomains.id, camp.senderDomainId)).limit(1))[0]
+    : (await db.select().from(schema.senderDomains).where(eq(schema.senderDomains.orgId, camp.orgId)).limit(1))[0]) ?? null;
 
   /* Last-24h stats from email_events. */
   const since = new Date(Date.now() - 24 * 3600 * 1000);
@@ -289,5 +293,6 @@ export async function gateCampaign(db: Database, campaignId: string, ctx: Launch
     bouncePausePct: ctx.bouncePausePct,
     complaintPausePct: ctx.complaintPausePct,
     unsubscribeReachable: domain?.unsubReachable ?? true,
+    requireSesProductionAccess: getConfig().ses.enabled,
   } as GateInput);
 }

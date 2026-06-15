@@ -5,6 +5,7 @@
 import { request } from 'undici';
 import * as cheerio from 'cheerio';
 import type { WebPresenceLevel } from '@keres/core';
+import { emailIntakeFilter } from '@keres/core';
 
 export interface ProbeResult {
   webPresenceLevel: WebPresenceLevel;
@@ -69,7 +70,9 @@ export class Scraper {
   }
 
   /** People-pages most likely to name the owner/decision-maker. */
-  static readonly PEOPLE_PATHS = ['/about', '/about-us', '/team', '/our-team', '/meet-the-team', '/staff', '/contact'];
+  /* Contact pages first — they're the richest for email + were being skipped
+     when they sat last in the list under the page budget. */
+  static readonly PEOPLE_PATHS = ['/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team', '/staff', '/contacts'];
 
   /**
    * Bounded multi-page crawl for owner/email finding: fetches up to `maxPages` of
@@ -125,16 +128,51 @@ function normalizeUrl(s: string): string {
   return `https://${s}`;
 }
 
+const EMAIL_RE = /[a-zA-Z0-9_.+\-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/g;
+
+/** Decode a Cloudflare-obfuscated email (data-cfemail / email-protection#hex). */
+function decodeCfEmail(hex: string): string | null {
+  if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length < 6 || hex.length % 2) return null;
+  const bytes = hex.match(/../g)!.map(h => parseInt(h, 16));
+  const key = bytes[0]!;
+  let s = '';
+  for (let i = 1; i < bytes.length; i++) s += String.fromCharCode(bytes[i]! ^ key);
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s) ? s : null;
+}
+
+/**
+ * Extract emails from a page, recovering the ones small-business sites hide:
+ * mailto links, Cloudflare protection, JSON-LD, HTML entities, and
+ * "name [at] domain [dot] com" style obfuscation. Every recovered address is a
+ * business we'd otherwise lose at the email step.
+ */
 function collectEmails($: cheerio.CheerioAPI, raw: string): string[] {
   const out = new Set<string>();
+  const add = (e: string | null | undefined) => { if (e) out.add(e.replace(/^mailto:/i, '').trim().toLowerCase()); };
+
+  /* 1. mailto: links (URL-decoded). */
   $('a[href^="mailto:"]').each((_, a) => {
-    const h = $(a).attr('href') ?? '';
-    const m = h.match(/^mailto:([^?]+)/i);
-    if (m && m[1]) out.add(m[1]!.trim().toLowerCase());
+    const m = ($(a).attr('href') ?? '').match(/^mailto:([^?]+)/i);
+    if (m?.[1]) { try { add(decodeURIComponent(m[1])); } catch { add(m[1]); } }
   });
-  const RE = /[a-zA-Z0-9_.+\-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/g;
-  for (const m of raw.match(RE) ?? []) out.add(m.toLowerCase());
-  return [...out].filter(e => !/(\.png|\.jpg|\.svg|@sentry|@example|wixpress|gravatar)/.test(e));
+
+  /* 2. Cloudflare email protection — extremely common on small-biz sites. */
+  $('[data-cfemail]').each((_, el) => add(decodeCfEmail($(el).attr('data-cfemail') ?? '')));
+  for (const m of raw.matchAll(/(?:data-cfemail="|email-protection#)([0-9a-fA-F]{6,})/g)) add(decodeCfEmail(m[1]!));
+
+  /* 3. JSON-LD / structured data + meta. */
+  for (const m of raw.matchAll(/"email"\s*:\s*"([^"]+)"/gi)) add(m[1]);
+
+  /* 4. HTML-entity-encoded @ and . , then plain matches. */
+  const deEntity = raw.replace(/&#0*64;|&commat;/gi, '@').replace(/&#0*46;/gi, '.');
+  for (const m of deEntity.match(EMAIL_RE) ?? []) add(m);
+
+  /* 5. Obfuscated: "name [at] domain [dot] com" / "name @ domain . com". */
+  const OBF = /([a-z0-9._%+\-]+)\s*(?:\[\s*at\s*\]|\(\s*at\s*\)|\{\s*at\s*\}|@)\s*([a-z0-9.\-]+?)\s*(?:\[\s*dot\s*\]|\(\s*dot\s*\)|\.)\s*([a-z]{2,24})\b/gi;
+  for (const m of raw.matchAll(OBF)) add(`${m[1]}@${m[2]}.${m[3]}`);
+
+  /* Drop scraped junk (placeholders, asset filenames, disposable). */
+  return [...out].filter(e => emailIntakeFilter(e).ok);
 }
 
 function dedupe<T>(a: T[]): T[] {

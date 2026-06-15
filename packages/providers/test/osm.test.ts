@@ -28,11 +28,24 @@ describe('OSM Overpass adapter', () => {
     expect(r.candidates[0].name).toBe('Test Septic');
     expect(r.attribution).toContain('OpenStreetMap contributors');
   });
-  it('skips elements without phone', async () => {
-    const fetcher = async () => ([{ type: 'node' as const, id: 1, tags: { name: 'No Phone' } }]);
+  it('keeps a website-only business (no phone) — those are the best leads', async () => {
+    const fetcher = async () => ([{ type: 'node' as const, id: 1, tags: { name: 'Web Only Septic', website: 'https://webonly.com' } }]);
+    const adapter = new OsmAdapter({ endpoint: 'x', userAgent: 't', enabled: true, fetcher });
+    const r = await adapter.search({ niche: 'Septic', city: 'Houston', state: 'TX', targetCount: 25 });
+    expect(r.candidates.length).toBe(1);
+    expect(r.candidates[0].website).toBe('https://webonly.com');
+    expect(r.candidates[0].phone).toBeNull();
+  });
+  it('skips a business with no contactable info at all', async () => {
+    const fetcher = async () => ([{ type: 'node' as const, id: 1, tags: { name: 'No Contact' } }]);
     const adapter = new OsmAdapter({ endpoint: 'x', userAgent: 't', enabled: true, fetcher });
     const r = await adapter.search({ niche: 'Septic', city: 'Houston', state: 'TX', targetCount: 25 });
     expect(r.candidates.length).toBe(0);
+  });
+  it('buildOverpass uses a bbox when geocoding succeeds', () => {
+    const q = buildOverpass({ niche: 'Plumber', city: 'Austin', state: 'TX', targetCount: 25 }, [30.1, -97.94, 30.52, -97.56]);
+    expect(q).toContain('(30.1,-97.94,30.52,-97.56)');
+    expect(q).not.toContain('admin_level');
   });
   it('sample adapter returns deterministic candidates with attribution', async () => {
     const adapter = new OsmSampleAdapter();

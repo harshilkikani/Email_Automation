@@ -74,11 +74,39 @@ export function emailIntakeFilter(email: string | null | undefined): { ok: boole
   if (!email) return { ok: true };
   const lower = email.toLowerCase().trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lower)) return { ok: false, reason: 'invalid_syntax' };
+  const local = lower.split('@')[0] ?? '';
   const domain = lower.split('@')[1] ?? '';
+  const tld = domain.split('.').pop() ?? '';
   if (DISPOSABLE_DOMAINS.has(domain)) return { ok: false, reason: 'disposable_domain' };
+  /* Scraped HTML often yields garbage that is syntactically an email but will
+     always bounce — every bounce hurts sender reputation, so drop these hard:
+       • placeholder/example addresses from form hints ("user@domain.com",
+         "j.doe@inbox.com", "you@example.com"),
+       • asset filenames matched as emails ("logo@2x.png", "icon@sprite.svg"). */
+  if (ASSET_EXTS.has(tld)) return { ok: false, reason: 'asset_filename' };
+  if (PLACEHOLDER_DOMAINS.has(domain)) return { ok: false, reason: 'placeholder_domain' };
+  if (PLACEHOLDER_LOCALS.has(local)) return { ok: false, reason: 'placeholder_local' };
   /* role accounts are warnings, not hard fails: handled at verification time. */
   return { ok: true };
 }
+
+const ASSET_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp', 'css', 'js', 'mp4', 'pdf']);
+
+/* ONLY unambiguous placeholders — never a real business domain (business.com,
+   email.com, name.com etc. are real and must NOT be here). */
+const PLACEHOLDER_DOMAINS = new Set([
+  'example.com', 'example.org', 'example.net', 'example.edu', 'domain.com', 'domain.tld',
+  'yourdomain.com', 'your-domain.com', 'yourcompany.com', 'your-company.com', 'mycompany.com',
+  'mydomain.com', 'yoursite.com', 'yourwebsite.com', 'companyname.com',
+  'wixpress.com', 'sentry.io', 'sentry-next.wixpress.com',
+]);
+
+const PLACEHOLDER_LOCALS = new Set([
+  'user', 'username', 'user1', 'name', 'firstname', 'lastname', 'firstname.lastname', 'first.last',
+  'name.surname', 'johndoe', 'john.doe', 'j.doe', 'janedoe', 'jane.doe', 'jane.smith', 'john.smith',
+  'email', 'your.email', 'youremail', 'yourname', 'your.name', 'example', 'sample', 'demo',
+  'test', 'test.test', 'test.email', 'someone', 'somebody', 'abc', 'xyz',
+]);
 
 const DISPOSABLE_DOMAINS = new Set([
   'mailinator.com', '10minutemail.com', 'guerrillamail.com', 'tempmail.com',

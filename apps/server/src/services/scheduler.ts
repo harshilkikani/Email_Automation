@@ -43,6 +43,8 @@ import { tickPersonalization } from './personalization.js';
 import { tickQueueMetrics } from './queue.js';
 import { withSpan } from '../observability.js';
 import { tickAiAnalysis } from './ai-analysis.js';
+import { tickBounceProcessing } from './bounce-processor.js';
+import { tickDmarcReports } from './dmarc-processor.js';
 import { NoaaAdapter } from '@keres/providers';
 
 type Tick = { name: string; everyMs: number; fn: (db: Database, log: FastifyBaseLogger) => Promise<unknown> };
@@ -69,6 +71,8 @@ export function startScheduler(db: Database, log: FastifyBaseLogger): SchedulerH
     { name: 'stuck_jobs_cleanup', everyMs: 5  * 60 * 1000,       fn: tickStuckJobsCleanup },
     { name: 'reply_branches',     everyMs: 5  * 60 * 1000,       fn: (db, log) => withSpan('tick.reply_branches',  () => tickReplyBranches(db, log)) },
     { name: 'unsub_probe',        everyMs: 15 * 60 * 1000,       fn: tickUnsubProbe },
+    { name: 'bounce_processing',  everyMs: 10 * 60 * 1000,       fn: (db, log) => withSpan('tick.bounce_processing', () => tickBounceProcessing(db, log)) },
+    { name: 'dmarc_reports',      everyMs: 6 * 60 * 60 * 1000,   fn: (db, log) => withSpan('tick.dmarc_reports', () => tickDmarcReports(db, log)) },
     { name: 'warmup_engine',      everyMs: 30 * 60 * 1000,       fn: (db, log) => withSpan('tick.warmup_engine',   () => tickWarmupEngine(db, log)) },
     { name: 'token_refill',       everyMs: 60 * 60 * 1000,       fn: async (db, _log) => refillHourlyTokens(db) },
     { name: 'dns_recheck',        everyMs: 60 * 60 * 1000,       fn: tickDnsRecheck },

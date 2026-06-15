@@ -48,8 +48,18 @@ describe('deterministicOpener', () => {
     expect(o).toContain('Acme Plumbing');
     expect(o).toContain('Austin');
   });
-  it('is null with no deficiencies', () => {
-    expect(deterministicOpener('Acme', 'Austin', [])).toBeNull();
+  it('still produces a varied, business-named generic opener with no deficiencies', () => {
+    const o = deterministicOpener('Acme', 'Austin', []);
+    expect(o).toContain('Acme');
+    expect(o.length).toBeGreaterThan(0);
+  });
+  it('varies across businesses but is stable for the same seed', () => {
+    const defs = deriveDeficiencies({ ...baseIntel }, { ...baseSig, hasOnlineBooking: false });
+    const a = deterministicOpener('Acme', 'Austin', defs, null, 'lead-a');
+    const b = deterministicOpener('Acme', 'Austin', defs, null, 'lead-b');
+    const c = deterministicOpener('Acme', 'Austin', defs, null, 'lead-zzz');
+    expect(deterministicOpener('Acme', 'Austin', defs, null, 'lead-a')).toBe(a);  // stable
+    expect(new Set([a, b, c]).size).toBeGreaterThan(1);                            // varies
   });
 });
 
@@ -105,13 +115,21 @@ describe('composeEmail (deep whole-email personalization)', () => {
     const body = composeEmail({ business: 'Acme Septic', city: 'Austin', niche: 'Septic', deficiencies: defs, ownerFirst: 'John' })!;
     expect(body).toContain('Hi John,');
     expect(body).toContain('Acme Septic');
-    expect(body).toContain('no online booking');     // the specific gap
+    expect(body).toMatch(/book/i);                    // references the booking gap
     expect(body).toContain('{{from_name}}');          // persona filled at render
     expect(body).toContain('{{from_signoff}}');
   });
-  it('falls back to "Hi there," without an owner, and is null with no gap', () => {
+  it('falls back to "Hi there," without an owner, and still composes a body with no gap', () => {
     expect(composeEmail({ business: 'Acme', city: '', niche: 'Septic', deficiencies: defs })).toContain('Hi there,');
-    expect(composeEmail({ business: 'Acme', city: '', niche: 'Septic', deficiencies: [] })).toBeNull();
+    const generic = composeEmail({ business: 'Acme', city: '', niche: 'Septic', deficiencies: [] });
+    expect(generic).toContain('Acme');
+    expect(generic).toContain('{{from_name}}');
+  });
+  it('businesses with the same gap get varied emails (seeded), stable per seed', () => {
+    const bodies = ['l1', 'l2', 'l3', 'l4', 'l5'].map(s =>
+      composeEmail({ business: 'Acme', city: 'Austin', niche: 'Plumber', deficiencies: defs, seed: s }));
+    expect(new Set(bodies).size).toBeGreaterThan(1);   // varies across leads
+    expect(composeEmail({ business: 'Acme', city: 'Austin', niche: 'Plumber', deficiencies: defs, seed: 'l1' })).toBe(bodies[0]); // stable
   });
   it('renderEmail uses the provided full body for touch 1', () => {
     const tpl = defaultTemplateFor('Septic');

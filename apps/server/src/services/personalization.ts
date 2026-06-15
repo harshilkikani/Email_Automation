@@ -48,46 +48,52 @@ export async function personalizeLead(db: Database, leadId: string): Promise<str
     reviewRating: sig.reviewRating ?? null,
   };
 
+  /* Derive verifiable gaps. May be empty — that's fine now: the deterministic
+     composer produces a varied, still-true generic email so EVERY lead is
+     personalized (no one falls back to the identical bare template). */
   const deficiencies = deriveDeficiencies(intelFacts, signalFacts);
-  if (deficiencies.length === 0) return null;   // nothing true & specific to say
 
   const adapter = getAiAdapter();
   let opener: string | null = null;
   const ownerFirst = lead.ownerName?.trim().split(/\s+/)[0] ?? null;
   let model = adapter.name;
   try {
-    opener = await adapter.personalizeOpener({
-      business: lead.name, city: lead.city ?? '',
-      niche: lead.niche as Niche, deficiencies, product: PRODUCT, ownerFirst,
-    });
+    opener = deficiencies.length
+      ? await adapter.personalizeOpener({
+          business: lead.name, city: lead.city ?? '',
+          niche: lead.niche as Niche, deficiencies, product: PRODUCT, ownerFirst,
+        })
+      : null;   // no LLM invention with nothing specific to say
   } catch (e) {
     obs().captureException(e, { leadId, op: 'personalize_opener' });
   }
   if (!opener) {
-    opener = deterministicOpener(lead.name, lead.city ?? '', deficiencies, ownerFirst);
+    /* seed = leadId → each business gets a different (but stable) variant. */
+    opener = deterministicOpener(lead.name, lead.city ?? '', deficiencies, ownerFirst, leadId);
     model = 'deterministic';
   }
-  if (!opener) return null;
 
   /* Deep personalization: a FULL email body (AI if available, else the
      deterministic composer). Replaces the template body for the first touch. */
   let body: string | null = null;
   try {
-    body = await adapter.personalizeEmail({
-      business: lead.name, city: lead.city ?? '',
-      niche: lead.niche as Niche, deficiencies, product: PRODUCT, ownerFirst,
-    });
+    body = deficiencies.length
+      ? await adapter.personalizeEmail({
+          business: lead.name, city: lead.city ?? '',
+          niche: lead.niche as Niche, deficiencies, product: PRODUCT, ownerFirst,
+        })
+      : null;
   } catch (e) {
     obs().captureException(e, { leadId, op: 'personalize_email' });
   }
   if (!body) {
-    body = composeEmail({ business: lead.name, city: lead.city ?? '', niche: lead.niche as Niche, deficiencies, ownerFirst });
+    body = composeEmail({ business: lead.name, city: lead.city ?? '', niche: lead.niche as Niche, deficiencies, ownerFirst, seed: leadId });
   }
 
   await db.update(schema.leadSignals).set({
     personalizedOpener: opener,
     personalizedBody: body,
-    personalizationFact: deficiencies[0]!.code,
+    personalizationFact: deficiencies[0]?.code ?? 'generic',
     personalizationModel: model,
     personalizationAt: new Date(),
   }).where(eq(schema.leadSignals.leadId, leadId));

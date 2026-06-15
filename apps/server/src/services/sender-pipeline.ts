@@ -19,6 +19,7 @@ import { pickMailbox, recordSendOutcome, type PickedMailbox } from './sender-rot
 import { checkSaturationBeforeSend } from './saturation.js';
 import { emitEvent } from './events.js';
 import { getPreferredHoursBulk, deferralTarget } from './send-time-histogram.js';
+import { saveToSentFolder } from './imap-client.js';
 
 /**
  * `CampaignDecision` is now exported from `@keres/core` (see
@@ -273,6 +274,11 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
         occurredAt: new Date(),
         rawPayload: { msgId, slot: rendered.slotKey } as Record<string, unknown>,
       }).onConflictDoNothing();
+      /* File a copy in the mailbox "Sent" folder (SMTP relay alone doesn't —
+         that's a mail-client behavior). Best-effort: never fail a send over it. */
+      if (cfg.imap.saveToSent && cfg.imap.user && cfg.imap.pass) {
+        await saveToSentFolder(cfg.imap, final.rawMessage).catch(() => undefined);
+      }
       /* Sequence: if more touches remain, re-queue the next one after the delay;
          otherwise this recipient is done. A reply/bounce/unsubscribe flips the
          recipient to a terminal state elsewhere, which stops the sequence. */

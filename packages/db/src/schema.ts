@@ -928,3 +928,25 @@ export const auditLog = pgTable('audit_log', {
   idxOccurred: index('audit_occurred').on(t.orgId, t.occurredAt),
   idxAction: index('audit_action').on(t.orgId, t.action),
 }));
+
+/* ───── DMARC aggregate reports (parsed from the mailbox) ───── */
+export const dmarcReports = pgTable('dmarc_reports', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').references(() => organizations.id, { onDelete: 'cascade' }),
+  reportId: text('report_id').notNull(),
+  orgName: text('org_name'),
+  domain: text('domain'),
+  policy: text('policy'),
+  dateBegin: timestamp('date_begin', { withTimezone: true }),
+  dateEnd: timestamp('date_end', { withTimezone: true }),
+  totalMessages: integer('total_messages').notNull().default(0),
+  dmarcPass: integer('dmarc_pass').notNull().default(0),
+  dmarcFail: integer('dmarc_fail').notNull().default(0),
+  spfPass: integer('spf_pass').notNull().default(0),
+  dkimPass: integer('dkim_pass').notNull().default(0),
+  rows: jsonb('rows'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  uniqReport: uniqueIndex('dmarc_reports_report_id').on(t.reportId),
+  idxCreated: index('dmarc_reports_created').on(t.createdAt),
+}));
