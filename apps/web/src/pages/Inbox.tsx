@@ -17,6 +17,18 @@ interface Sent {
   toName: string | null; toEmail: string | null; campaign: string | null;
 }
 
+interface PerfRow { k: string | null; sent: number; replied: number; bounced: number }
+interface Perf {
+  overall: { sent: number; replied: number; bounced: number };
+  byOffer: PerfRow[]; byCta: PerfRow[]; byGap: PerfRow[]; byAiAngle: PerfRow[]; byNiche: PerfRow[];
+}
+
+/* Friendly labels mirroring the copy levers in core personalization. */
+const CTA_LABEL = ['"send a 2-min example?"', '"reply yes for an example"', '"catching missed calls?"', '"mind if I send an example?"', '"open to a rundown?"'];
+const AI_LABEL: Record<string, string> = { urgent: '24/7 AI receptionist', recurring: 'reactivation agent', estimate: 'estimate follow-up', realestate: 'instant inquiry reply', default: 'receptionist + agents' };
+const OFFER_LABEL: Record<string, string> = { ai_solutions: 'AI solutions (core pitch)', claim_supplement: 'Insurance claim supplement', liens: 'Get-paid / liens' };
+const fmtPct = (r: PerfRow) => r.sent > 0 ? `${((r.replied / r.sent) * 100).toFixed(1)}%` : '—';
+
 const INTENTS = [
   'interested','conditional','objection',
   'not_interested_polite','not_interested_hostile',
@@ -39,7 +51,8 @@ export default function Inbox() {
   const t = useToast();
   const [rows, setRows] = useState<Reply[]>([]);
   const [sent, setSent] = useState<Sent[]>([]);
-  const [view, setView] = useState<'sent' | 'replies'>('sent');
+  const [perf, setPerf] = useState<Perf | null>(null);
+  const [view, setView] = useState<'sent' | 'replies' | 'performance'>('sent');
   const [filter, setFilter] = useState<string>('all');
   const [focusIdx, setFocusIdx] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -52,7 +65,11 @@ export default function Inbox() {
     const r = await api.get<{ rows: Sent[] }>('/sent');
     if (r.ok && r.data) setSent(r.data.rows);
   };
-  useEffect(() => { refresh(); refreshSent(); }, []);
+  const refreshPerf = async () => {
+    const r = await api.get<Perf>('/performance');
+    if (r.ok && r.data) setPerf(r.data);
+  };
+  useEffect(() => { refresh(); refreshSent(); refreshPerf(); }, []);
 
   const [sentFilter, setSentFilter] = useState('all');
   const filtered = useMemo(() => filter === 'all' ? rows : rows.filter(r => (r.manualIntent ?? r.autoIntent ?? 'unknown') === filter), [rows, filter]);
@@ -156,9 +173,50 @@ export default function Inbox() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button className={'btn btn-xs ' + (view === 'sent' ? 'btn-primary' : 'btn-secondary')} onClick={() => setView('sent')}>Sent ({sent.length})</button>
               <button className={'btn btn-xs ' + (view === 'replies' ? 'btn-primary' : 'btn-secondary')} onClick={() => setView('replies')}>Replies ({rows.length})</button>
+              <button className={'btn btn-xs ' + (view === 'performance' ? 'btn-primary' : 'btn-secondary')} onClick={() => setView('performance')}>Performance</button>
             </div>
-            <span className="tbl-meta">{view === 'sent' ? `${sent.length} sent` : `${filtered.length} replies`}</span>
+            <span className="tbl-meta">{view === 'sent' ? `${sent.length} sent` : view === 'replies' ? `${filtered.length} replies` : `${perf?.overall.sent ?? 0} sent · ${perf?.overall.replied ?? 0} replied`}</span>
           </div>
+
+          {view === 'performance' && perf && (
+            <div style={{ padding: 14 }}>
+              <div className="health-tiles" style={{ marginBottom: 14 }}>
+                {[['Sent', perf.overall.sent], ['Replied', perf.overall.replied],
+                  ['Reply rate', perf.overall.sent > 0 ? `${((perf.overall.replied / perf.overall.sent) * 100).toFixed(1)}%` : '—'],
+                  ['Bounced', perf.overall.bounced]].map(([k, v]) => (
+                  <div className="h-tile" key={k as string}><div className="ht-name">{k}</div><div className="ht-state">{v as any}</div></div>
+                ))}
+              </div>
+              {(perf.overall.replied === 0 || perf.overall.sent < 100) && (
+                <div className="callout" style={{ marginBottom: 14 }}>
+                  <strong>Still gathering signal.</strong> Cold email runs ~1–5% reply rates and replies lag by days, so you need a few hundred sends before these numbers mean anything. Every send is now tagged with the copy it used, so as replies come in this will show exactly which subjects, CTAs, and pitches win — and we can then auto-favor the winners.
+                </div>
+              )}
+              {([['Offer (which pitch)', perf.byOffer, (k: string | null) => OFFER_LABEL[k ?? ''] ?? k ?? '—'],
+                 ['Call-to-action', perf.byCta, (k: string | null) => CTA_LABEL[Number(k)] ?? k ?? '—'],
+                 ['Gap pitched', perf.byGap, (k: string | null) => (k ?? '—').replace(/_/g, ' ')],
+                 ['AI angle', perf.byAiAngle, (k: string | null) => AI_LABEL[k ?? ''] ?? k ?? '—'],
+                 ['Trade', perf.byNiche, (k: string | null) => k ?? '—']] as const).map(([title, data, label]) => (
+                <div key={title} style={{ marginBottom: 16 }}>
+                  <div className="sb-label" style={{ marginBottom: 6 }}><span>{title}</span></div>
+                  <table className="data-table" style={{ width: '100%', fontSize: 13 }}>
+                    <thead><tr><th style={{ textAlign: 'left' }}>Variant</th><th>Sent</th><th>Replied</th><th>Reply&nbsp;rate</th></tr></thead>
+                    <tbody>
+                      {data.length === 0 && <tr><td colSpan={4} style={{ color: 'var(--fg-3)' }}>No sends yet</td></tr>}
+                      {data.map((r, i) => (
+                        <tr key={i} style={{ opacity: r.sent < 20 ? 0.55 : 1 }}>
+                          <td>{label(r.k)}</td>
+                          <td style={{ textAlign: 'center' }}>{r.sent}</td>
+                          <td style={{ textAlign: 'center' }}>{r.replied}</td>
+                          <td style={{ textAlign: 'center', color: r.replied > 0 ? 'var(--accent)' : 'var(--fg-3)' }}>{fmtPct(r)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          )}
 
           {view === 'sent' && (
             <div>

@@ -6,7 +6,7 @@ const NICHES = ['Septic', 'Water/Mold', 'HVAC', 'Roofer', 'Plumber', 'Electricia
   'Pest Control', 'Garage Door', 'Locksmith', 'Appliance Repair', 'Pool Service', 'Landscaping',
   'Painter', 'Carpet Cleaning', 'Handyman', 'Tree Service',
   'Fencing', 'Concrete', 'Moving', 'Junk Removal', 'Window Cleaning', 'Pressure Washing', 'Solar', 'Flooring'];
-const US_METRO_HINT = 189;  // size of the server's built-in metro sweep list (display hint)
+const US_METRO_HINT = 336;  // size of the server's built-in metro sweep list (display hint)
 
 interface Recipient { name: string; city: string | null; email: string | null; owner: string | null; opener: string | null; verified: boolean }
 interface ScrapeResult {
@@ -19,12 +19,13 @@ interface Sweep { cursor: number; total: number; pool: number; added: number; la
 
 export default function ScrapeSend() {
   const t = useToast();
-  const [source, setSource] = useState<'auto' | 'online' | 'licenses' | 'mass'>('auto');
+  const [source, setSource] = useState<'auto' | 'online' | 'licenses' | 'mass' | 'offer'>('auto');
+  const [offer, setOffer] = useState<'claim_supplement' | 'liens'>('claim_supplement');
   const [niche, setNiche] = useState('Septic');
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [count, setCount] = useState(15);
-  const [followups, setFollowups] = useState(2);
+  const [followups, setFollowups] = useState(3);
   const [phase, setPhase] = useState<'form' | 'review' | 'sending'>('form');
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<ScrapeResult | null>(null);
@@ -41,6 +42,8 @@ export default function ScrapeSend() {
   const [dmarc, setDmarc] = useState<{ passPct: number | null; totalMessages: number; reports: number } | null>(null);
   /* Daily send-limit status. */
   const [sendStatus, setSendStatus] = useState<{ sentToday: number; dailyCap: number; remaining: number; capReached: boolean; pending: number } | null>(null);
+  /* Lead-pool volume. */
+  const [leadStats, setLeadStats] = useState<{ total: number; with_email: number; sendable: number; contacted: number; today: number; week: number; byNiche: { k: string; n: number }[] } | null>(null);
 
   useEffect(() => () => { if (poll.current) window.clearInterval(poll.current); stopRef.current = true; }, []);
   useEffect(() => { (async () => {
@@ -48,6 +51,8 @@ export default function ScrapeSend() {
     if (r.ok && r.data?.summary) setDmarc(r.data.summary);
     const s = await api.get<{ sentToday: number; dailyCap: number; remaining: number; capReached: boolean; pending: number }>('/send-status');
     if (s.ok && s.data) setSendStatus(s.data);
+    const ls = await api.get<typeof leadStats>('/leads/stats');
+    if (ls.ok && ls.data) setLeadStats(ls.data);
   })(); }, [phase, status]);
 
   const startPolling = (campaignId: string) => {
@@ -103,6 +108,16 @@ export default function ScrapeSend() {
     t.push('success', `${r.data.inserted} new · pool ${r.data.recipientCount} · ${r.data.verified} verified`);
   };
 
+  /* Validation: A/B a different offer (claim supplement / get-paid) on the niche's pool. */
+  const validateOffer = async () => {
+    setBusy(true); setGate(null);
+    const r = await api.post<ScrapeResult>('/quick/validate', { offer, niche, count, followups });
+    setBusy(false);
+    if (!r.ok || !r.data) { t.push('error', 'Couldn’t stage offer test', r.error); return; }
+    setRes(r.data); setPhase('review');
+    t.push('success', `Staged ${r.data.recipientCount} for the ${offer === 'claim_supplement' ? 'claim-supplement' : 'get-paid'} test`);
+  };
+
   const scrape = async () => {
     if (!state || (source === 'online' && !city)) { t.push('warn', source === 'online' ? 'Enter a city and state' : 'Enter a state'); return; }
     setBusy(true); setGate(null);
@@ -147,6 +162,28 @@ export default function ScrapeSend() {
         )}
       </div>
       <div className="container">
+        {/* Lead-pool volume — at-a-glance */}
+        {leadStats && (
+          <div className="panel" style={{ marginBottom: 14 }}>
+            <div className="panel-head" style={{ marginBottom: 10 }}>
+              <h2>Lead pool</h2>
+              <span className="tbl-meta">{leadStats.today > 0 ? `+${leadStats.today} today` : ''}{leadStats.week > 0 ? ` · +${leadStats.week} this week` : ''} · filling automatically</span>
+            </div>
+            <div className="health-tiles">
+              {[['Total leads', leadStats.total], ['Sendable (ready)', leadStats.sendable], ['With email', leadStats.with_email], ['Contacted', leadStats.contacted], ['Added today', leadStats.today]].map(([k, v]) => (
+                <div className="h-tile" key={k as string}><div className="ht-name">{k}</div><div className="ht-state">{(v as number).toLocaleString()}</div></div>
+              ))}
+            </div>
+            {leadStats.byNiche.length > 0 && (
+              <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {leadStats.byNiche.slice(0, 12).map(b => (
+                  <span key={b.k} className="pill" style={{ fontSize: 12 }}>{b.k}: <strong>{b.n}</strong></span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Daily send-limit status */}
         {sendStatus && sendStatus.dailyCap > 0 && (
           sendStatus.capReached ? (
@@ -170,12 +207,20 @@ export default function ScrapeSend() {
                 {NICHES.map(n => <option key={n} value={n}>{n}</option>)}
               </select></div>
             <div className="field"><label className="field-label">Source</label>
-              <select className="field-input" value={source} onChange={e => setSource(e.target.value as 'auto' | 'online' | 'licenses' | 'mass')} disabled={phase !== 'form'}>
+              <select className="field-input" value={source} onChange={e => setSource(e.target.value as 'auto' | 'online' | 'licenses' | 'mass' | 'offer')} disabled={phase !== 'form'}>
                 <option value="auto">Find leads anywhere (recommended)</option>
                 <option value="online">Target a specific city</option>
                 <option value="mass">Fill the pool fast — sweep all metros</option>
+                <option value="offer">Test an offer (A/B a pitch)</option>
                 <option value="licenses">My licensed-contractor list</option>
               </select></div>
+            {source === 'offer' && (
+              <div className="field"><label className="field-label">Offer to test</label>
+                <select className="field-input" value={offer} onChange={e => setOffer(e.target.value as 'claim_supplement' | 'liens')} disabled={phase !== 'form'}>
+                  <option value="claim_supplement">Insurance claim supplement (roofing/restoration)</option>
+                  <option value="liens">Get-paid / liens (any contractor)</option>
+                </select></div>
+            )}
             {source === 'online' && (
               <div className="field"><label className="field-label">City</label>
                 <input className="field-input" value={city} onChange={e => setCity(e.target.value)} placeholder="Austin" disabled={phase !== 'form'} /></div>
@@ -197,7 +242,8 @@ export default function ScrapeSend() {
                 <option value={0}>None (1 email)</option>
                 <option value={1}>1 follow-up</option>
                 <option value={2}>2 follow-ups</option>
-                <option value={3}>3 follow-ups</option>
+                <option value={3}>3 follow-ups (recommended)</option>
+                <option value={4}>4 follow-ups</option>
               </select></div>
           </div>
           {source === 'auto' && phase === 'form' && (
@@ -209,6 +255,17 @@ export default function ScrapeSend() {
           {source === 'mass' && (
             <p className="panel-desc" style={{ marginTop: 4 }}>Sweeps major US metros for <strong>{niche}</strong>, piling every verified business into one pool, then you send to all of them (dripped safely within your daily cap). Best for filling the pool fast.</p>
           )}
+          {source === 'offer' && phase === 'form' && (
+            <>
+              <button className="btn btn-primary" onClick={validateOffer} disabled={busy}>{busy ? <span className="spinner" /> : `Stage ${count} for offer test`}</button>
+              <p className="panel-desc" style={{ marginTop: 10 }}>
+                A/B tests a different pitch on your <strong>{niche}</strong> pool: {offer === 'claim_supplement'
+                  ? <>“we recover the 20–40% insurers underpay on your claims” (best for <strong>Roofer</strong> / <strong>Water/Mold</strong>).</>
+                  : <>“our AI files lien notices so you never lose the right to get paid” (any contractor).</>} Review, send, then compare reply rate in the Inbox → Performance tab.
+              </p>
+            </>
+          )}
+          {source === 'offer' && phase !== 'form' && <button className="btn btn-secondary btn-sm" onClick={reset}>↺ Start over</button>}
           {(source === 'online' || source === 'licenses') && (
             phase === 'form'
               ? <button className="btn btn-primary" onClick={scrape} disabled={busy}>{busy ? <span className="spinner" /> : 'Scrape businesses'}</button>

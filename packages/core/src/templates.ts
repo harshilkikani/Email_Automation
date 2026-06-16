@@ -27,16 +27,22 @@ export interface Template {
 
 /** Short, niche-agnostic follow-up bumps (sent only if no reply). Personalized
  *  with the business name + persona signoff; the CAN-SPAM footer is appended later. */
+/* Escalating, reply-based sequence (no links). Follow-ups drive ~42% of all
+   replies; the ask widens from soft → example → a quick time → a breakup. */
 export const DEFAULT_FOLLOWUPS: string[] = [
-  `Hey {{business}} — floating my note back to the top of your inbox in case it slipped by. Still glad to show how it works in ~10 minutes. Worth a quick look?
+  `Floating this back to the top in case it slipped by, {{business}}. Worth a quick look?
 
 {{from_name}}
 {{from_signoff}}`,
-  `Following up once more for {{business}}. If timing's off right now, no worries — want me to send a 2-minute example of what it'd look like for you?
+  `No worries if timing's off — want me to send a 2-minute example of how it'd work for {{business}}?
 
 {{from_name}}
 {{from_signoff}}`,
-  `Closing the loop here. If you ever want to stop letting calls slip to voicemail, just reply and I'll set it up. All the best.
+  `If email's a hassle, worth a quick 10 minutes this week? Reply with a time that works for {{business}} and I'll send over an invite.
+
+{{from_name}}
+{{from_signoff}}`,
+  `I'll stop here so I'm not cluttering your inbox. If catching more jobs ever becomes a priority for {{business}}, just reply "info" and I'll send the details. All the best.
 
 {{from_name}}
 {{from_signoff}}`,

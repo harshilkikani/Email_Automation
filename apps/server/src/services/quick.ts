@@ -6,8 +6,8 @@
  */
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
-import { and, inArray, isNull, sql } from 'drizzle-orm';
-import { defaultTemplateFor, type Niche } from '@keres/core';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { defaultTemplateFor, composeOfferEmail, offerSubjects, OFFER_LABEL, cleanFirstName, type Niche, type ValidationOffer } from '@keres/core';
 import { runDiscovery } from './discovery.js';
 import { personalizeLead } from './personalization.js';
 import { createCampaign, buildRecipients, renderPreview, resolveAudience, type AudienceFilter } from './campaigns.js';
@@ -199,6 +199,56 @@ export const US_METROS: Array<{ city: string; state: string }> = [
   { city: 'Worcester', state: 'MA' }, { city: 'Springfield', state: 'MA' }, { city: 'Providence', state: 'RI' },
   { city: 'Manchester', state: 'NH' }, { city: 'Allentown', state: 'PA' }, { city: 'Erie', state: 'PA' },
   { city: 'Syracuse', state: 'NY' }, { city: 'Albany', state: 'NY' }, { city: 'Yonkers', state: 'NY' },
+  // ── more metros (wave 3) ──
+  { city: 'Oceanside', state: 'CA' }, { city: 'Santa Rosa', state: 'CA' }, { city: 'Elk Grove', state: 'CA' },
+  { city: 'Corona', state: 'CA' }, { city: 'Lancaster', state: 'CA' }, { city: 'Salinas', state: 'CA' },
+  { city: 'Hayward', state: 'CA' }, { city: 'Sunnyvale', state: 'CA' }, { city: 'Escondido', state: 'CA' },
+  { city: 'Roseville', state: 'CA' }, { city: 'Visalia', state: 'CA' }, { city: 'Concord', state: 'CA' },
+  { city: 'Temecula', state: 'CA' }, { city: 'Amarillo', state: 'TX' }, { city: 'Grand Prairie', state: 'TX' },
+  { city: 'McAllen', state: 'TX' }, { city: 'College Station', state: 'TX' }, { city: 'Beaumont', state: 'TX' },
+  { city: 'Tyler', state: 'TX' }, { city: 'League City', state: 'TX' }, { city: 'New Braunfels', state: 'TX' },
+  { city: 'Georgetown', state: 'TX' }, { city: 'Temple', state: 'TX' }, { city: 'Longview', state: 'TX' },
+  { city: 'St. Petersburg', state: 'FL' }, { city: 'Lakeland', state: 'FL' }, { city: 'Pompano Beach', state: 'FL' },
+  { city: 'Coral Springs', state: 'FL' }, { city: 'Palm Bay', state: 'FL' }, { city: 'West Palm Beach', state: 'FL' },
+  { city: 'Clearwater', state: 'FL' }, { city: 'Brandon', state: 'FL' }, { city: 'Kissimmee', state: 'FL' },
+  { city: 'Sarasota', state: 'FL' }, { city: 'Boca Raton', state: 'FL' }, { city: 'Ocala', state: 'FL' },
+  { city: 'Surprise', state: 'AZ' }, { city: 'Yuma', state: 'AZ' }, { city: 'Avondale', state: 'AZ' },
+  { city: 'Goodyear', state: 'AZ' }, { city: 'Flagstaff', state: 'AZ' }, { city: 'Gastonia', state: 'NC' },
+  { city: 'Asheville', state: 'NC' }, { city: 'Chapel Hill', state: 'NC' }, { city: 'Concord', state: 'NC' },
+  { city: 'Sandy Springs', state: 'GA' }, { city: 'Roswell', state: 'GA' }, { city: 'Warner Robins', state: 'GA' },
+  { city: 'Marietta', state: 'GA' }, { city: 'Albany', state: 'GA' }, { city: 'Renton', state: 'WA' },
+  { city: 'Yakima', state: 'WA' }, { city: 'Federal Way', state: 'WA' }, { city: 'Bellingham', state: 'WA' },
+  { city: 'Kennewick', state: 'WA' }, { city: 'Olympia', state: 'WA' }, { city: 'Centennial', state: 'CO' },
+  { city: 'Boulder', state: 'CO' }, { city: 'Greeley', state: 'CO' }, { city: 'Longmont', state: 'CO' },
+  { city: 'Loveland', state: 'CO' }, { city: 'Canton', state: 'OH' }, { city: 'Youngstown', state: 'OH' },
+  { city: 'Parma', state: 'OH' }, { city: 'Hamilton', state: 'OH' }, { city: 'Johnson City', state: 'TN' },
+  { city: 'Franklin', state: 'TN' }, { city: 'Jackson', state: 'TN' }, { city: 'Kingsport', state: 'TN' },
+  { city: 'Carmel', state: 'IN' }, { city: 'Bloomington', state: 'IN' }, { city: 'Lafayette', state: 'IN' },
+  { city: 'Noblesville', state: 'IN' }, { city: 'Roanoke', state: 'VA' }, { city: 'Lynchburg', state: 'VA' },
+  { city: 'Alexandria', state: 'VA' }, { city: 'Hampton', state: 'VA' }, { city: 'Newport News', state: 'VA' },
+  { city: 'Charlottesville', state: 'VA' }, { city: 'Bend', state: 'OR' }, { city: 'Medford', state: 'OR' },
+  { city: 'Beaverton', state: 'OR' }, { city: 'Sparks', state: 'NV' }, { city: 'Sandy', state: 'UT' },
+  { city: 'Orem', state: 'UT' }, { city: 'St. George', state: 'UT' }, { city: 'Lehi', state: 'UT' },
+  { city: 'Layton', state: 'UT' }, { city: 'Las Cruces', state: 'NM' }, { city: 'Rio Rancho', state: 'NM' },
+  { city: 'Santa Fe', state: 'NM' }, { city: 'Norman', state: 'OK' }, { city: 'Broken Arrow', state: 'OK' },
+  { city: 'Edmond', state: 'OK' }, { city: 'Lafayette', state: 'LA' }, { city: 'Lake Charles', state: 'LA' },
+  { city: 'Metairie', state: 'LA' }, { city: 'Greenville', state: 'SC' }, { city: 'Rock Hill', state: 'SC' },
+  { city: 'Mount Pleasant', state: 'SC' }, { city: 'Spartanburg', state: 'SC' }, { city: 'Montgomery', state: 'AL' },
+  { city: 'Tuscaloosa', state: 'AL' }, { city: 'Hoover', state: 'AL' }, { city: 'Jackson', state: 'MS' },
+  { city: 'Gulfport', state: 'MS' }, { city: 'Fayetteville', state: 'AR' }, { city: 'Fort Smith', state: 'AR' },
+  { city: 'Jonesboro', state: 'AR' }, { city: 'Bowling Green', state: 'KY' }, { city: 'Owensboro', state: 'KY' },
+  { city: 'Rochester', state: 'MN' }, { city: 'Bloomington', state: 'MN' }, { city: 'Duluth', state: 'MN' },
+  { city: 'Maple Grove', state: 'MN' }, { city: 'Appleton', state: 'WI' }, { city: 'Waukesha', state: 'WI' },
+  { city: 'Eau Claire', state: 'WI' }, { city: 'Iowa City', state: 'IA' }, { city: 'Ames', state: 'IA' },
+  { city: 'Lawrence', state: 'KS' }, { city: 'Nampa', state: 'ID' }, { city: 'Meridian', state: 'ID' },
+  { city: 'Idaho Falls', state: 'ID' }, { city: 'Coeur d\'Alene', state: 'ID' }, { city: 'Missoula', state: 'MT' },
+  { city: 'Bozeman', state: 'MT' }, { city: 'Schenectady', state: 'NY' }, { city: 'Utica', state: 'NY' },
+  { city: 'White Plains', state: 'NY' }, { city: 'Edison', state: 'NJ' }, { city: 'Trenton', state: 'NJ' },
+  { city: 'Clifton', state: 'NJ' }, { city: 'Reading', state: 'PA' }, { city: 'Bethlehem', state: 'PA' },
+  { city: 'Harrisburg', state: 'PA' }, { city: 'Lowell', state: 'MA' }, { city: 'Cambridge', state: 'MA' },
+  { city: 'Quincy', state: 'MA' }, { city: 'New Bedford', state: 'MA' }, { city: 'Stamford', state: 'CT' },
+  { city: 'Waterbury', state: 'CT' }, { city: 'Norwalk', state: 'CT' }, { city: 'Frederick', state: 'MD' },
+  { city: 'Rockville', state: 'MD' }, { city: 'Gaithersburg', state: 'MD' },
 ];
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(n, hi));
@@ -296,6 +346,61 @@ export async function quickGet(db: Database, input: {
   };
   return stageAndReview(db, qi, `${input.niche} — anywhere`,
     { niche: input.niche, status: 'uncontacted' }, found, added);
+}
+
+/**
+ * Validation campaign: pitch an ALTERNATE offer (insurance-claim supplement, or
+ * get-paid/liens) to a niche's pool, so we can A/B its reply rate against the
+ * core AI-solutions pitch. Overwrites each lead's stored body with the offer
+ * copy + tags the variant `offer`, then sends through the normal gated pipeline.
+ */
+export async function stageValidationOffer(db: Database, input: {
+  orgId: string; offer: ValidationOffer; niche: Niche; count?: number; followups?: number; stepDelayDays?: number;
+}): Promise<QuickScrapeResult> {
+  const { orgId, niche, offer } = input;
+  const { leadIds: poolIds } = await resolveAudience(db, orgId, { niche, status: 'uncontacted' });
+  const leadIds = poolIds.slice(0, clamp(input.count ?? 25, 1, 100));
+
+  if (leadIds.length) {
+    const genLeads = await db.select({ id: schema.leads.id, name: schema.leads.name, city: schema.leads.city, owner: schema.leads.ownerName })
+      .from(schema.leads).where(inArray(schema.leads.id, leadIds));
+    for (const l of genLeads) {
+      const ownerFirst = cleanFirstName(l.owner);
+      const { body, variant } = composeOfferEmail({ offer, business: l.name, city: l.city ?? '', ownerFirst, seed: l.id });
+      await db.update(schema.leadSignals).set({
+        personalizedBody: body,
+        personalizedOpener: null,
+        personalizationFact: offer,
+        personalizationModel: 'offer',
+        personalizationVariant: variant as unknown as Record<string, unknown>,
+        personalizationAt: new Date(),
+      }).where(eq(schema.leadSignals.leadId, l.id));
+    }
+  }
+
+  const tpl = defaultTemplateFor(niche);
+  const [sa, sb] = offerSubjects(offer);
+  const { id: campaignId } = await createCampaign(db, {
+    orgId, name: `${OFFER_LABEL[offer]} — ${niche} (${new Date().toISOString().slice(0, 10)})`,
+    templateKey: tpl.key, subjectA: sa, subjectB: sb,
+    audienceFilter: { leadIds }, sequenceSteps: 1 + Math.max(0, input.followups ?? 0), stepDelayDays: input.stepDelayDays ?? 3,
+  });
+  const recipientCount = leadIds.length ? await buildRecipients(db, campaignId) : 0;
+
+  const leads = leadIds.length
+    ? await db.select({ id: schema.leads.id, name: schema.leads.name, city: schema.leads.city, email: schema.leads.email, owner: schema.leads.ownerName, ev: schema.leads.emailVerificationStatus })
+        .from(schema.leads).where(inArray(schema.leads.id, leadIds))
+    : [];
+  const withEmail = leads.filter(l => l.email);
+  const recipients = withEmail.map(l => ({ name: l.name, city: l.city, email: l.email, owner: l.owner ?? null, opener: OFFER_LABEL[offer], verified: isSendableStatus(l.ev) }));
+  const firstSendable = withEmail.find(l => isSendableStatus(l.ev)) ?? withEmail[0];
+  let sample: QuickScrapeResult['sample'] = null;
+  if (firstSendable) { try { sample = await renderPreview(db, campaignId, firstSendable.id); } catch { /* ignore */ } }
+
+  return {
+    campaignId, found: leadIds.length, inserted: 0, withEmail: withEmail.length,
+    verified: recipients.filter(r => r.verified).length, recipientCount, recipients, sample,
+  };
 }
 
 /** Stage a campaign over the ENTIRE verified, uncontacted pool for a niche. */

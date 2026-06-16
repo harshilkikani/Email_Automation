@@ -182,6 +182,7 @@ export const leadSignals = pgTable('lead_signals', {
   personalizedBody: text('personalized_body'),          // full deep-personalized body (touch 1)
   personalizationFact: text('personalization_fact'),   // chosen deficiency code
   personalizationModel: text('personalization_model'), // adapter/model that wrote it
+  personalizationVariant: jsonb('personalization_variant'), // {gap,cta,hook,ai} copy levers — for performance learning
   personalizationAt: timestamp('personalization_at', { withTimezone: true }),
 }, t => ({
   webCheck: check('web_check', sql`${t.webPresenceLevel} IN ('none','social_only','gbp_only','basic','modern','unknown')`),

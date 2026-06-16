@@ -16,7 +16,7 @@ import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import type { FastifyBaseLogger } from 'fastify';
 import {
-  deriveDeficiencies, deterministicOpener, composeEmail,
+  deriveDeficiencies, deterministicOpener, composeEmail, messageVariant, cleanFirstName,
   type IntelFacts, type SignalFacts, type Niche,
 } from '@keres/core';
 import { getAiAdapter } from './ai.js';
@@ -55,7 +55,7 @@ export async function personalizeLead(db: Database, leadId: string): Promise<str
 
   const adapter = getAiAdapter();
   let opener: string | null = null;
-  const ownerFirst = lead.ownerName?.trim().split(/\s+/)[0] ?? null;
+  const ownerFirst = cleanFirstName(lead.ownerName);
   let model = adapter.name;
   try {
     opener = deficiencies.length
@@ -95,6 +95,7 @@ export async function personalizeLead(db: Database, leadId: string): Promise<str
     personalizedBody: body,
     personalizationFact: deficiencies[0]?.code ?? 'generic',
     personalizationModel: model,
+    personalizationVariant: messageVariant({ niche: lead.niche as Niche, deficiencies, seed: leadId }) as unknown as Record<string, unknown>,
     personalizationAt: new Date(),
   }).where(eq(schema.leadSignals.leadId, leadId));
   return opener;

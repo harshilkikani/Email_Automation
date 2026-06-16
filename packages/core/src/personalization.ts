@@ -150,6 +150,24 @@ export function deriveDeficiencies(intel: IntelFacts, signals: SignalFacts, nowY
  * per-lead seed, so two businesses with the same deficiency still get visibly
  * different emails — while never asserting anything we can't verify. */
 
+const NON_NAMES = new Set([
+  'thanks', 'thank', 'hello', 'hi', 'hey', 'welcome', 'contact', 'home', 'team', 'our', 'the', 'info',
+  'owner', 'manager', 'customer', 'service', 'services', 'support', 'call', 'free', 'get', 'your', 'about',
+  'name', 'here', 'dear', 'sir', 'madam', 'please', 'email', 'quote', 'today', 'now', 'more', 'staff',
+  'office', 'sales', 'admin', 'help', 'click', 'menu', 'search', 'login', 'review', 'reviews', 'company',
+  'business', 'llc', 'inc', 'co', 'corp', 'mr', 'mrs', 'ms', 'dr', 'guest', 'user', 'friend', 'there',
+]);
+
+/** Validate a scraped owner first-name — rejects junk like "Thanks"/"Welcome"
+ * that the crawler sometimes grabs, so we never send "Hi Thanks,". */
+export function cleanFirstName(name: string | null | undefined): string | null {
+  const f = (name ?? '').trim().split(/\s+/)[0] ?? '';
+  if (f.length < 2 || f.length > 15) return null;
+  if (!/^[A-Z][A-Za-z'’.\-]{1,14}$/.test(f)) return null;   // must look like a Name
+  if (NON_NAMES.has(f.toLowerCase())) return null;
+  return f;
+}
+
 /** Small stable string hash → non-negative int. Deterministic across runs. */
 function seedInt(s: string): number {
   let h = 2166136261;
@@ -200,71 +218,6 @@ const GENERIC_HOOKS = [
   'the calls that come in while you\'re on a job are the ones that tend to get away',
 ];
 const GENERIC_FIX = "we build the custom websites, online booking, and review systems that turn more of those calls into booked jobs";
-
-/** Short, niche-flavored proof lines (rotated by seed). */
-const PROOF_LINES: Partial<Record<Niche, string[]>> = {
-  Septic: [
-    'Most septic crews cover the cost from a single after-hours job they would have missed.',
-    'One emergency pump-out you catch at 9pm usually pays for a month of this.',
-    'After-hours septic calls are urgent — whoever answers first gets the job.',
-  ],
-  Roofer: [
-    'After a storm, one captured estimate usually pays for it many times over.',
-    'Storm-season calls come in waves; the ones you answer are the ones you book.',
-    'Homeowners with a leak call down the list until someone picks up.',
-  ],
-  HVAC: [
-    'On the hottest days the calls never stop — none of them should go to voicemail.',
-    'A no-cool call in July is a same-day job if you actually answer it.',
-    'In peak season, every missed call is an install handed to a competitor.',
-  ],
-  Plumber: [
-    'A 2am burst-pipe call is a same-day job; missing it hands it to the next plumber.',
-    'Emergency plumbing callers hire whoever answers — speed wins the job.',
-    'Most plumbers book an extra job or two a week just by never missing the phone.',
-  ],
-  Electrician: [
-    'Every after-hours call you catch is work that would have gone elsewhere.',
-    "Urgent electrical calls don't wait — the first to answer usually wins.",
-    'A single captured panel or rewire job covers this many times over.',
-  ],
-  'Water/Mold': [
-    'Water-damage callers hire whoever answers first — that should be you.',
-    'Every hour matters with water damage; the fastest response books the job.',
-    'One mitigation job you catch after hours pays for this outright.',
-  ],
-  Towing: [
-    'Roadside callers go straight down the list until someone picks up.',
-    'Stranded drivers call the first tow that answers — that\'s the whole game.',
-    'Every missed roadside call is a paid tow handed to the next company.',
-  ],
-  'Real Estate': [
-    'A lead that reaches a real person, not voicemail, is a lead you keep.',
-    "Buyers calling on a listing won't leave a message — they call the next agent.",
-    'The first agent to respond wins the showing more often than not.',
-  ],
-  'Pest Control': [
-    'Someone who just saw a roach calls the first company that picks up — same-day money.',
-    'Pest calls are urgent and emotional; the fastest response books the treatment.',
-  ],
-  'Garage Door': ['A stuck or broken garage door is a same-day call — whoever answers gets the repair.'],
-  Locksmith: [
-    'A lockout call goes to whoever answers first — every missed ring is a paid job gone.',
-    'Locksmith calls are 100% urgent; speed to answer is the whole game.',
-  ],
-  'Appliance Repair': ['A dead fridge or washer is a same-day call — the first to answer books it.'],
-  'Pool Service': ['Green-pool and pump-failure calls go to whoever picks up first.'],
-  Landscaping: ['Most new lawn-care clients call 2-3 companies — the one that answers wins the contract.'],
-  Painter: ['Estimate calls go cold fast; the painter who answers first usually lands the job.'],
-  'Carpet Cleaning': ['Last-minute "company coming over" calls go to whoever answers right then.'],
-  Handyman: ['Handyman calls are small but constant — answering every one fills the schedule.'],
-  'Tree Service': ['A leaning or storm-damaged tree is an urgent call — the first answer wins the job.'],
-};
-const PROOF_DEFAULT = [
-  'Most owners we work with book extra jobs within the first week.',
-  'The businesses that answer every call simply close more work.',
-  'Every missed call is revenue handed to whoever picks up next.',
-];
 
 /* Interest-based, low-friction asks — a first cold email gets far more replies
    asking "want me to send an example?" than "book a 10-minute call." */
@@ -347,6 +300,96 @@ export function deterministicOpener(
  * (generic missed-call angle when there's no specific gap) so every lead is
  * personalized, never the bare template.
  */
+/**
+ * The discrete copy levers a given email used (gap pitched, CTA, hook shape, AI
+ * angle) — recorded per send so the performance loop can learn which variants
+ * earn replies. Mirrors composeEmail's seeded picks exactly.
+ */
+export function messageVariant(input: { niche: Niche; deficiencies: Deficiency[]; seed: string }): {
+  offer: string; gap: string; cta: number; hook: number; ai: string;
+} {
+  const n = seedInt(input.seed);
+  const idx = (len: number, salt: number) => ((n + salt * 2654435761) % len + len) % len;
+  return {
+    offer: 'ai_solutions',
+    gap: input.deficiencies[0]?.code ?? 'generic',
+    cta: idx(CTAS.length, 4),      // composeEmail picks CTA with salt 4
+    hook: idx(6, 5),               // 6 hook shapes, salt 5
+    ai: input.niche === 'Real Estate' ? 'realestate'
+      : URGENT_SET.has(input.niche) ? 'urgent'
+      : RECURRING_SET.has(input.niche) ? 'recurring'
+      : ESTIMATE_SET.has(input.niche) ? 'estimate' : 'default',
+  };
+}
+
+/* ─────────────── Validation offers (alternate pitches to A/B test) ───────────────
+ * Distinct value props we're testing against the core AI-solutions pitch:
+ *  - claim_supplement: recover under-billed insurance dollars (roofing/restoration)
+ *  - liens: never lose the right to get paid (all contractor trades)
+ * Same seeded-variety + {{from_name}}/{{from_signoff}} machinery, so they send,
+ * dedupe, and track exactly like every other email. */
+export type ValidationOffer = 'claim_supplement' | 'liens';
+
+export const OFFER_LABEL: Record<ValidationOffer, string> = {
+  claim_supplement: 'Insurance claim supplement',
+  liens: 'Get-paid / liens',
+};
+
+/** Subject templates (with {{business}} tokens) for an offer campaign. */
+export function offerSubjects(offer: ValidationOffer): [string, string] {
+  return offer === 'claim_supplement'
+    ? ['did your last claim leave money behind, {{business}}?', 'a recent insurance claim at {{business}}']
+    : ['getting paid on time, {{business}}', 'protect {{business}} from unpaid invoices'];
+}
+
+const OFFER_BODY: Record<ValidationOffer, { hooks: (b: string, w: string) => string[]; value: string[]; ctas: (b: string) => string[] }> = {
+  claim_supplement: {
+    hooks: (b, w) => [
+      `I came across ${b}${w} and had a quick question about your insurance jobs.`,
+      `Quick one for ${b}${w} on storm and damage claims.`,
+    ],
+    value: [
+      "Carriers write the first scope at 50–65% of what a job is actually worth, so most contractors leave 20–40% on the table per claim. We run the carrier's scope and your photos through AI and draft a properly-coded Xactimate supplement to recover what's owed — usually approved in days.",
+      "Most insurance estimates come in 35–50% low. Our AI compares the carrier's scope against trade-correct line items and writes the supplement for you, so you stop leaving money on every claim.",
+    ],
+    ctas: (b) => [
+      `Want a free review on a recent claim? Send me the carrier scope and I'll show you exactly what it left behind.`,
+      `Mind sending one recent claim? I'll show you in 2 minutes what ${b} could've recovered.`,
+    ],
+  },
+  liens: {
+    hooks: (b, w) => [
+      `I came across ${b}${w} and wanted to flag something about getting paid.`,
+      `Quick one for ${b}${w} on unpaid invoices.`,
+    ],
+    value: [
+      "Contractors who send the right preliminary notice and lien recover 80% of unpaid invoices — the ones who don't recover 30% — but most miss the 20–45 day notice deadline and quietly lose the right to get paid. Our AI tracks every job's deadlines and auto-files the correct notice and lien for your state.",
+      "The #1 reason contractors don't get paid isn't bad customers — it's a missed notice deadline. Our AI watches every job and files the right paperwork on time, in all 50 states, so you keep your right to get paid.",
+    ],
+    ctas: (b) => [
+      `Want me to show you how it'd protect ${b}'s payments? Reply and I'll send a 2-minute example.`,
+      `Worth a look? Reply "yes" and I'll send a quick example for ${b}.`,
+    ],
+  },
+};
+
+/** Compose an offer email body + its variant tag (for performance attribution). */
+export function composeOfferEmail(input: { offer: ValidationOffer; business: string; city: string; ownerFirst?: string | null; seed?: string }): {
+  body: string; variant: { offer: ValidationOffer; cta: number; hook: number };
+} {
+  const n = seedInt(input.seed ?? input.business);
+  const greet = input.ownerFirst && input.ownerFirst.trim() ? `Hi ${input.ownerFirst.trim()},` : 'Hi there,';
+  const where = input.city ? ` in ${input.city}` : '';
+  const c = OFFER_BODY[input.offer];
+  const hooks = c.hooks(input.business, where);
+  const ctas = c.ctas(input.business);
+  const hookIdx = ((n + 5 * 2654435761) % hooks.length + hooks.length) % hooks.length;
+  const ctaIdx = ((n + 4 * 2654435761) % ctas.length + ctas.length) % ctas.length;
+  const value = pick(c.value, n, 3);
+  const body = `${greet}\n\n${hooks[hookIdx]}\n\n${value}\n\n${ctas[ctaIdx]}\n\n{{from_name}}\n{{from_signoff}}`;
+  return { body, variant: { offer: input.offer, cta: ctaIdx, hook: hookIdx } };
+}
+
 export function composeEmail(input: {
   business: string; city: string; niche: Niche; deficiencies: Deficiency[];
   ownerFirst?: string | null; seed?: string;
@@ -361,7 +404,6 @@ export function composeEmail(input: {
     : pick(GENERIC_HOOKS, n, 1);
   const fix = cap(top ? top.fix : GENERIC_FIX);
   const ai = aiAngle(niche, n);
-  const proof = pick(PROOF_LINES[niche] ?? PROOF_DEFAULT, n, 3);
   const cta = pick(CTAS, n, 4)(business);
 
   const hooks = [
@@ -374,15 +416,13 @@ export function composeEmail(input: {
   ];
   const hook = pick(hooks, n, 5);
 
-  /* Value para = the gap-matched fix + the AI we'd put to work (receptionist /
-     reactivation / estimate-follow-up, by trade). Proof line for credibility. */
+  /* Kept under ~90 words on purpose — short cold emails get ~50% more replies.
+     One value para (gap-matched fix + the AI we'd put to work), one soft ask. */
   return `${greet}
 
 ${hook}
 
 ${fix}. ${ai}
-
-${proof}
 
 ${cta}
 

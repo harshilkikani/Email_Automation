@@ -14,7 +14,7 @@ import {
 import { classifyPhone } from '@keres/providers';
 import { getConfig } from './config.js';
 import { runDiscovery } from './services/discovery.js';
-import { quickScrape, quickFromLicenses, quickStatus, quickSweep, quickGet, quickPoolStage, US_METROS } from './services/quick.js';
+import { quickScrape, quickFromLicenses, quickStatus, quickSweep, quickGet, quickPoolStage, stageValidationOffer, US_METROS } from './services/quick.js';
 import {
   createCampaign, buildRecipients, renderPreview,
 } from './services/campaigns.js';
@@ -334,6 +334,20 @@ export function registerRoutes(app: FastifyInstance) {
       return { ok: false, error: 'discovery_failed', detail: e?.message ?? String(e) };
     }
     await writeAudit('quick_scrape', r.campaignId, { niche: b.niche, city: b.city, state: b.state, found: r.found, withEmail: r.withEmail }, req);
+    return { ok: true, ...r };
+  });
+
+  /* Validation campaign: A/B-test an alternate offer (claim supplement / liens)
+     against the core pitch, over a niche's existing pool. */
+  app.post('/api/quick/validate', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { offer?: string; niche?: string; count?: number; followups?: number };
+    if (b.offer !== 'claim_supplement' && b.offer !== 'liens') return { ok: false, error: 'bad_offer' };
+    if (!b.niche) return { ok: false, error: 'missing_niche' };
+    const r = await stageValidationOffer(getDb(), {
+      orgId, offer: b.offer, niche: b.niche as 'Roofer', count: b.count, followups: b.followups,
+    });
+    await writeAudit('quick_validate', r.campaignId, { offer: b.offer, niche: b.niche, staged: r.recipientCount }, req);
     return { ok: true, ...r };
   });
 
@@ -1161,6 +1175,63 @@ ${r.ok
       warmupDay: d?.warmupDay ?? 0,
       warmupState: d?.warmupState ?? null,
       pending: Number(pend?.n ?? 0),
+    };
+  });
+
+  /* Lead-pool volume — total / sendable / contacted + growth + per-niche, for
+     an at-a-glance dashboard of how the pool is filling. */
+  app.get('/api/leads/stats', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const rowsOf = (r: unknown) => ((r as { rows?: Array<Record<string, unknown>> }).rows ?? (r as Array<Record<string, unknown>>));
+    const s = rowsOf(await db.execute(sql`
+      SELECT
+        count(*)::int AS total,
+        count(*) FILTER (WHERE email IS NOT NULL)::int AS with_email,
+        count(*) FILTER (WHERE email IS NOT NULL AND disqualified = false
+          AND status NOT IN ('contacted','bounced','unsubscribed','dnc')
+          AND (email_verification_status IS NULL OR email_verification_status NOT IN ('invalid','disposable')))::int AS sendable,
+        count(*) FILTER (WHERE status = 'contacted')::int AS contacted,
+        count(*) FILTER (WHERE discovered_at > date_trunc('day', now()))::int AS today,
+        count(*) FILTER (WHERE discovered_at > now() - interval '7 days')::int AS week
+      FROM leads WHERE org_id = ${orgId} AND deleted_at IS NULL`))[0];
+    const byNiche = rowsOf(await db.execute(sql`
+      SELECT niche AS k, count(*)::int AS n FROM leads
+      WHERE org_id = ${orgId} AND deleted_at IS NULL AND disqualified = false
+      GROUP BY 1 ORDER BY n DESC`));
+    return { ok: true, ...s, byNiche };
+  });
+
+  /* Message performance: reply/bounce rates per copy lever (CTA, gap pitched, AI
+     angle, niche) so the operator can see which messages earn replies. Needs
+     volume to be meaningful — tiny samples are surfaced as such by the UI. */
+  app.get('/api/performance', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const rowsOf = (r: unknown) => ((r as { rows?: Array<Record<string, unknown>> }).rows ?? (r as Array<Record<string, unknown>>));
+    const dim = async (expr: ReturnType<typeof sql>) => rowsOf(await db.execute(sql`
+      SELECT ${expr} AS k,
+        count(*)::int AS sent,
+        count(*) FILTER (WHERE cr.state = 'replied')::int AS replied,
+        count(*) FILTER (WHERE cr.state = 'bounced')::int AS bounced
+      FROM campaign_recipients cr
+      JOIN lead_signals s ON s.lead_id = cr.lead_id
+      JOIN leads l ON l.id = cr.lead_id
+      WHERE cr.org_id = ${orgId} AND cr.first_sent_at IS NOT NULL
+      GROUP BY 1 ORDER BY replied DESC, sent DESC`));
+    const overall = rowsOf(await db.execute(sql`
+      SELECT count(*)::int AS sent,
+        count(*) FILTER (WHERE state = 'replied')::int AS replied,
+        count(*) FILTER (WHERE state = 'bounced')::int AS bounced
+      FROM campaign_recipients WHERE org_id = ${orgId} AND first_sent_at IS NOT NULL`))[0];
+    return {
+      ok: true,
+      overall,
+      byOffer: await dim(sql`coalesce(s.personalization_variant->>'offer', 'ai_solutions')`),
+      byCta: await dim(sql`s.personalization_variant->>'cta'`),
+      byGap: await dim(sql`s.personalization_variant->>'gap'`),
+      byAiAngle: await dim(sql`s.personalization_variant->>'ai'`),
+      byNiche: await dim(sql`l.niche`),
     };
   });
 
