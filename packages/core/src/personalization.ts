@@ -326,20 +326,25 @@ export function messageVariant(input: { niche: Niche; deficiencies: Deficiency[]
  * Distinct value props we're testing against the core AI-solutions pitch:
  *  - claim_supplement: recover under-billed insurance dollars (roofing/restoration)
  *  - liens: never lose the right to get paid (all contractor trades)
+ *  - reviews: auto-collect Google reviews (every local business; rank + get picked)
  * Same seeded-variety + {{from_name}}/{{from_signoff}} machinery, so they send,
  * dedupe, and track exactly like every other email. */
-export type ValidationOffer = 'claim_supplement' | 'liens';
+export type ValidationOffer = 'claim_supplement' | 'liens' | 'reviews';
 
 export const OFFER_LABEL: Record<ValidationOffer, string> = {
   claim_supplement: 'Insurance claim supplement',
   liens: 'Get-paid / liens',
+  reviews: 'Google reviews autopilot',
 };
 
 /** Subject templates (with {{business}} tokens) for an offer campaign. */
 export function offerSubjects(offer: ValidationOffer): [string, string] {
-  return offer === 'claim_supplement'
-    ? ['did your last claim leave money behind, {{business}}?', 'a recent insurance claim at {{business}}']
-    : ['getting paid on time, {{business}}', 'protect {{business}} from unpaid invoices'];
+  const subjects: Record<ValidationOffer, [string, string]> = {
+    claim_supplement: ['did your last claim leave money behind, {{business}}?', 'a recent insurance claim at {{business}}'],
+    liens: ['getting paid on time, {{business}}', 'protect {{business}} from unpaid invoices'],
+    reviews: ['more google reviews for {{business}}?', 'a quick idea for {{business}}'],
+  };
+  return subjects[offer];
 }
 
 const OFFER_BODY: Record<ValidationOffer, { hooks: (b: string, w: string) => string[]; value: string[]; ctas: (b: string) => string[] }> = {
@@ -369,6 +374,20 @@ const OFFER_BODY: Record<ValidationOffer, { hooks: (b: string, w: string) => str
     ctas: (b) => [
       `Want me to show you how it'd protect ${b}'s payments? Reply and I'll send a 2-minute example.`,
       `Worth a look? Reply "yes" and I'll send a quick example for ${b}.`,
+    ],
+  },
+  reviews: {
+    hooks: (b, w) => [
+      `I came across ${b}${w} and had a quick thought about your Google reviews.`,
+      `Quick one for ${b}${w} about online reviews.`,
+    ],
+    value: [
+      "Most people pick the business with the most recent 5-star reviews — top local shops average ~47, and a single extra star can lift revenue 5–9%. We set up a system that automatically texts every happy customer the moment a job wraps and asks for a Google review, so you climb the map pack and get chosen over competitors.",
+      "The hardest part of reviews is just remembering to ask. Our system asks for you — it messages each customer right after the job, so the 5-star reviews pile up on autopilot and you rank above the shops that forget to ask.",
+    ],
+    ctas: (b) => [
+      `Want a 2-minute example of how it'd work for ${b}?`,
+      `Worth a look? Reply "yes" and I'll show you what it'd do for ${b}'s reviews.`,
     ],
   },
 };

@@ -20,7 +20,7 @@ interface Sweep { cursor: number; total: number; pool: number; added: number; la
 export default function ScrapeSend() {
   const t = useToast();
   const [source, setSource] = useState<'auto' | 'online' | 'licenses' | 'mass' | 'offer'>('auto');
-  const [offer, setOffer] = useState<'claim_supplement' | 'liens'>('claim_supplement');
+  const [offer, setOffer] = useState<'claim_supplement' | 'liens' | 'reviews'>('claim_supplement');
   const [niche, setNiche] = useState('Septic');
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
@@ -115,7 +115,8 @@ export default function ScrapeSend() {
     setBusy(false);
     if (!r.ok || !r.data) { t.push('error', 'Couldn’t stage offer test', r.error); return; }
     setRes(r.data); setPhase('review');
-    t.push('success', `Staged ${r.data.recipientCount} for the ${offer === 'claim_supplement' ? 'claim-supplement' : 'get-paid'} test`);
+    const offerName = offer === 'claim_supplement' ? 'claim-supplement' : offer === 'liens' ? 'get-paid' : 'reviews';
+    t.push('success', `Staged ${r.data.recipientCount} for the ${offerName} test`);
   };
 
   const scrape = async () => {
@@ -216,9 +217,10 @@ export default function ScrapeSend() {
               </select></div>
             {source === 'offer' && (
               <div className="field"><label className="field-label">Offer to test</label>
-                <select className="field-input" value={offer} onChange={e => setOffer(e.target.value as 'claim_supplement' | 'liens')} disabled={phase !== 'form'}>
+                <select className="field-input" value={offer} onChange={e => setOffer(e.target.value as 'claim_supplement' | 'liens' | 'reviews')} disabled={phase !== 'form'}>
                   <option value="claim_supplement">Insurance claim supplement (roofing/restoration)</option>
                   <option value="liens">Get-paid / liens (any contractor)</option>
+                  <option value="reviews">Google reviews autopilot (any local business)</option>
                 </select></div>
             )}
             {source === 'online' && (

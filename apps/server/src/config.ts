@@ -110,6 +110,11 @@ export interface KeresConfig {
     includeBookingLink: boolean;   // off by default — reply-only policy asks for phone + time
   };
 
+  /** Defer sends to land during the recipient's local business hours (~10am). */
+  localSendTiming: {
+    enabled: boolean;
+  };
+
   /** IMAP polling for bounce/NDR processing (plain mailboxes have no webhook). */
   imap: {
     enabled: boolean;
@@ -307,6 +312,10 @@ export function getConfig(): Readonly<KeresConfig> {
     autoResponder: {
       enabled: bool('ENABLE_AUTO_RESPONDER', true),
       includeBookingLink: bool('AUTO_RESPONDER_BOOKING_LINK', false),
+    },
+
+    localSendTiming: {
+      enabled: bool('ENABLE_LOCAL_SEND_TIMING', true),
     },
 
     imap: {

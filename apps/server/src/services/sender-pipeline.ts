@@ -16,6 +16,7 @@ import { getConfig } from '../config.js';
 import { gateCampaign } from './campaigns.js';
 import { getOutbound } from './sender-factory.js';
 import { pickMailbox, recordSendOutcome, type PickedMailbox } from './sender-rotation.js';
+import { localSendDeferral } from './local-time.js';
 import { checkSaturationBeforeSend } from './saturation.js';
 import { emitEvent } from './events.js';
 import { getPreferredHoursBulk, deferralTarget } from './send-time-histogram.js';
@@ -163,6 +164,21 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
     const org = orgMap.get(r.orgId);
     if (!camp || !org) { skipped++; continue; }
     if (!lead) { skipped++; await markSkipped(db, r.rid, 'no_lead'); continue; }
+
+    /* Recipient-local timing: push the send to the next local business-hours
+       slot (~10am local, weekdays) based on the lead's state. Lands the email
+       when it's actually morning for them rather than whenever UTC the batch
+       fires. Skips this tick; nextSendAt gates the re-pick. */
+    if (cfg.localSendTiming.enabled) {
+      const localDefer = localSendDeferral(wallNow, lead.state);
+      if (localDefer && localDefer.getTime() > wallNow.getTime()) {
+        await db.update(schema.campaignRecipients)
+          .set({ nextSendAt: localDefer })
+          .where(eq(schema.campaignRecipients.id, r.rid));
+        skipped++;
+        continue;
+      }
+    }
 
     /* Layer 7: defer to high-reply-rate hour if this niche has a learned
        preference and we're earlier in the day. Updates `nextSendAt` and

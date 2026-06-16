@@ -342,7 +342,7 @@ export function registerRoutes(app: FastifyInstance) {
   app.post('/api/quick/validate', async (req) => {
     const orgId = await singleOrgId();
     const b = (req.body ?? {}) as { offer?: string; niche?: string; count?: number; followups?: number };
-    if (b.offer !== 'claim_supplement' && b.offer !== 'liens') return { ok: false, error: 'bad_offer' };
+    if (b.offer !== 'claim_supplement' && b.offer !== 'liens' && b.offer !== 'reviews') return { ok: false, error: 'bad_offer' };
     if (!b.niche) return { ok: false, error: 'missing_niche' };
     const r = await stageValidationOffer(getDb(), {
       orgId, offer: b.offer, niche: b.niche as 'Roofer', count: b.count, followups: b.followups,
@@ -1165,7 +1165,21 @@ ${r.ok
       .from(schema.campaignRecipients)
       .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignRecipients.campaignId))
       .where(and(eq(schema.campaigns.status, 'running'), eq(schema.campaignRecipients.state, 'pending'))))[0];
-    const sentToday = d?.sendsToday ?? 0;
+    /* Count actual sends today from the recipients (ground truth). The
+       senderDomains.sendsToday counter is only meaningful in the mailbox-rotation
+       path; the Spacemail single-sender setup has no mailbox rows, so it stays 0.
+       lastSentAt is stamped on every send (touch 1 + follow-ups) — one per
+       recipient per day — so this is the true "emails out the door today". UTC
+       midnight matches the daily rollover boundary. */
+    const dayStartUtc = new Date(); dayStartUtc.setUTCHours(0, 0, 0, 0);
+    const sentRow = (await db.select({ n: sql<number>`count(*)::int` })
+      .from(schema.campaignRecipients)
+      .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignRecipients.campaignId))
+      .where(and(
+        eq(schema.campaigns.orgId, orgId),
+        gte(schema.campaignRecipients.lastSentAt, dayStartUtc),
+      )))[0];
+    const sentToday = Number(sentRow?.n ?? 0);
     const dailyCap = d?.dailySendBudget ?? 0;
     return {
       ok: true,
