@@ -21,6 +21,14 @@ export interface HunterFindResult {
   source: 'hunter';
 }
 
+export interface HunterOwnerCandidate {
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  position: string | null;
+  confidence: number | null;   // 0..1
+}
+
 export class HunterAdapter implements VerificationProvider {
   readonly name = 'hunter';
   constructor(private cfg: HunterConfig) {}
@@ -36,6 +44,30 @@ export class HunterAdapter implements VerificationProvider {
     const data = json?.data;
     if (!data || !data.email) return { email: null, confidence: null, source: 'hunter' };
     return { email: data.email, confidence: typeof data.score === 'number' ? data.score / 100 : null, source: 'hunter' };
+  }
+
+  /**
+   * Domain search — the right shape for local businesses (no name needed): given
+   * a company's domain it returns every email it knows plus the person's name +
+   * position, so we can pick the owner/decision-maker. Apollo is poor for this
+   * (LinkedIn-sourced, <25% home-services coverage); Hunter indexes the site itself.
+   */
+  async domainSearch(domain: string): Promise<HunterOwnerCandidate[]> {
+    if (!this.isEnabled()) return [];
+    const fetcher = this.cfg.fetcher ?? this.realFetch.bind(this);
+    const params = new URLSearchParams({ domain, api_key: this.cfg.apiKey });
+    const json = await fetcher(`https://api.hunter.io/v2/domain-search?${params.toString()}`);
+    const emails = json?.data?.emails;
+    if (!Array.isArray(emails)) return [];
+    return emails
+      .map((e: any): HunterOwnerCandidate => ({
+        email: String(e?.value ?? ''),
+        firstName: e?.first_name ?? null,
+        lastName: e?.last_name ?? null,
+        position: e?.position ?? null,
+        confidence: typeof e?.confidence === 'number' ? e.confidence / 100 : null,
+      }))
+      .filter((c: HunterOwnerCandidate) => c.email.length > 0);
   }
 
   async verify(email: string): Promise<VerificationResult> {

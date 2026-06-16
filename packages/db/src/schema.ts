@@ -132,6 +132,8 @@ export const leads = pgTable('leads', {
   lastContactedAt: timestamp('last_contacted_at', { withTimezone: true }),
   /* Set when the instant auto-responder acknowledges a positive reply (one per lead). */
   autoRespondedAt: timestamp('auto_responded_at', { withTimezone: true }),
+  /* Set when we've attempted Hunter owner-enrichment (success or not) so we never re-burn a credit. */
+  hunterEnrichedAt: timestamp('hunter_enriched_at', { withTimezone: true }),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   /* generated dedupe keys */
   dedupEmail: citext('dedup_email').generatedAlwaysAs(sql`lower(email)`),

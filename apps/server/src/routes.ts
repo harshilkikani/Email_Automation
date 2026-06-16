@@ -15,6 +15,7 @@ import { classifyPhone } from '@keres/providers';
 import { getConfig } from './config.js';
 import { runDiscovery } from './services/discovery.js';
 import { quickScrape, quickFromLicenses, quickStatus, quickSweep, quickGet, quickPoolStage, stageValidationOffer, US_METROS } from './services/quick.js';
+import { enrichOwnersViaHunter } from './services/owner-enrich.js';
 import {
   createCampaign, buildRecipients, renderPreview,
 } from './services/campaigns.js';
@@ -453,6 +454,15 @@ export function registerRoutes(app: FastifyInstance) {
     }
     await writeAudit('repersonalize', orgId, { regenerated, skipped, total: ids.length }, req);
     return { ok: true, regenerated, skipped, total: ids.length };
+  });
+
+  /* Owner enrichment via Hunter domain-search (top-value un-named leads). Paid +
+     operator-triggered so credit spend is deliberate. No-op unless ENABLE_HUNTER. */
+  app.post('/api/admin/enrich-owners', async (req) => {
+    const b = (req.body ?? {}) as { limit?: number };
+    const r = await enrichOwnersViaHunter(getDb(), app.log, Math.min(b.limit ?? 25, 200));
+    await writeAudit('enrich_owners', null, r as Record<string, unknown>, req);
+    return { ok: true, ...r };
   });
 
   /* Mass send: stage a campaign over the ENTIRE verified pool for a niche and
