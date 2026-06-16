@@ -115,6 +115,12 @@ export interface KeresConfig {
     enabled: boolean;
   };
 
+  /** Background re-verification of the existing pool (catch dead/catch-all mailboxes). */
+  reverify: {
+    enabled: boolean;
+    batch: number;
+  };
+
   /** IMAP polling for bounce/NDR processing (plain mailboxes have no webhook). */
   imap: {
     enabled: boolean;
@@ -316,6 +322,11 @@ export function getConfig(): Readonly<KeresConfig> {
 
     localSendTiming: {
       enabled: bool('ENABLE_LOCAL_SEND_TIMING', true),
+    },
+
+    reverify: {
+      enabled: bool('ENABLE_REVERIFY', true),
+      batch: num('REVERIFY_BATCH', 20),
     },
 
     imap: {

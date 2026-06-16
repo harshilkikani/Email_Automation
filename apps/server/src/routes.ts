@@ -16,6 +16,7 @@ import { getConfig } from './config.js';
 import { runDiscovery } from './services/discovery.js';
 import { quickScrape, quickFromLicenses, quickStatus, quickSweep, quickGet, quickPoolStage, stageValidationOffer, US_METROS } from './services/quick.js';
 import { enrichOwnersViaHunter } from './services/owner-enrich.js';
+import { tickReverify } from './services/reverify.js';
 import {
   createCampaign, buildRecipients, renderPreview,
 } from './services/campaigns.js';
@@ -454,6 +455,24 @@ export function registerRoutes(app: FastifyInstance) {
     }
     await writeAudit('repersonalize', orgId, { regenerated, skipped, total: ids.length }, req);
     return { ok: true, regenerated, skipped, total: ids.length };
+  });
+
+  /* Re-verify a batch of the existing pool now (catch dead/catch-all mailboxes
+     that predate catch-all detection) to drive the bounce rate down. The
+     scheduler also runs this every 3 min in the background. */
+  app.post('/api/admin/reverify', async (req) => {
+    const b = (req.body ?? {}) as { batches?: number };
+    const passes = Math.min(Math.max(1, b.batches ?? 1), 10);
+    const totals = { rechecked: 0, newlyBad: 0, stillSendable: 0 };
+    for (let i = 0; i < passes; i++) {
+      const r = await tickReverify(getDb(), app.log);
+      totals.rechecked += r.rechecked ?? 0;
+      totals.newlyBad += r.newlyBad ?? 0;
+      totals.stillSendable += r.stillSendable ?? 0;
+      if ((r.rechecked ?? 0) === 0) break;
+    }
+    await writeAudit('reverify', null, totals as Record<string, unknown>, req);
+    return { ok: true, ...totals };
   });
 
   /* Owner enrichment via Hunter domain-search (top-value un-named leads). Paid +

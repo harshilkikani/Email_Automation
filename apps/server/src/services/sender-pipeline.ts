@@ -17,6 +17,7 @@ import { gateCampaign } from './campaigns.js';
 import { getOutbound } from './sender-factory.js';
 import { pickMailbox, recordSendOutcome, type PickedMailbox } from './sender-rotation.js';
 import { localSendDeferral } from './local-time.js';
+import { isSendableStatus } from './verify.js';
 import { checkSaturationBeforeSend } from './saturation.js';
 import { emitEvent } from './events.js';
 import { getPreferredHoursBulk, deferralTarget } from './send-time-histogram.js';
@@ -42,6 +43,9 @@ function computeDecision(
   if (camp.status !== 'running') return { shouldSend: false, skipReason: 'campaign_not_running', mailbox: null, template: defaultTemplateFor(lead.niche as 'Septic'), subjectOverrides: [], senderIdentity: { fromName: '', fromEmail: '', replyTo: '' } };
   if (!lead.email) return { shouldSend: false, skipReason: 'no_email', mailbox: null, template: defaultTemplateFor(lead.niche as 'Septic'), subjectOverrides: [], senderIdentity: { fromName: '', fromEmail: '', replyTo: '' } };
   if (['bounced', 'unsubscribed', 'dnc'].includes(lead.status)) return { shouldSend: false, skipReason: 'lead_status', mailbox: null, template: defaultTemplateFor(lead.niche as 'Septic'), subjectOverrides: [], senderIdentity: { fromName: '', fromEmail: '', replyTo: '' } };
+  /* Send-time verification guard: a recipient queued before re-verification may
+     now be known-bad (invalid/disposable/catch_all). Skip it so it never bounces. */
+  if (!isSendableStatus(lead.emailVerificationStatus)) return { shouldSend: false, skipReason: 'unverified_email', mailbox: null, template: defaultTemplateFor(lead.niche as 'Septic'), subjectOverrides: [], senderIdentity: { fromName: '', fromEmail: '', replyTo: '' } };
   if (sat.action === 'block') return { shouldSend: false, skipReason: `saturation_${sat.reason}`, mailbox: null, template: defaultTemplateFor(lead.niche as 'Septic'), subjectOverrides: [], senderIdentity: { fromName: '', fromEmail: '', replyTo: '' } };
 
   const senderIdentity = mailbox
