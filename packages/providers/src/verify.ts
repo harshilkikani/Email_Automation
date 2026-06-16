@@ -64,11 +64,22 @@ export class FreeVerifier implements VerificationProvider {
       return { status: 'unverifiable_provider', source: 'smtp', detail: 'major free provider' };
     }
 
-    /* Optional SMTP probe — disabled by default. */
+    /* Optional SMTP probe. */
     if (this.cfg.enableSmtp && this.cfg.smtpProbe && mxRecords.length > 0) {
-      const accepted = await this.cfg.smtpProbe(lower, mxRecords[0]!);
-      if (accepted === true) return { status: isRoleEmail(lower) ? 'role' : 'valid', source: 'smtp' };
+      const mx = mxRecords[0]!;
+      const accepted = await this.cfg.smtpProbe(lower, mx);
       if (accepted === false) return { status: 'invalid', source: 'smtp' };
+      if (accepted === true) {
+        /* Catch-all detection: a domain that ALSO accepts a guaranteed-nonexistent
+           mailbox accepts everything at RCPT, so the 250 for the real address tells
+           us nothing — these bounce ~27% vs ~1% for confirmed mailboxes. Flag them
+           so the send guard can exclude (or segment) them. One extra probe, only
+           when the first was accepted. */
+        const bogus = `kr-verify-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}@${domain}`;
+        const acceptsBogus = await this.cfg.smtpProbe(bogus, mx);
+        if (acceptsBogus === true) return { status: 'catch_all', source: 'smtp', detail: 'accepts all recipients' };
+        return { status: isRoleEmail(lower) ? 'role' : 'valid', source: 'smtp' };
+      }
       return { status: 'unknown', source: 'smtp', detail: 'ambiguous response' };
     }
 

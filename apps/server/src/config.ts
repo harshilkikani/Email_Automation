@@ -101,6 +101,13 @@ export interface KeresConfig {
   verify: {
     smtpProbe: boolean;       // SMTP RCPT mailbox probe (free; catches dead mailboxes)
     smtpTimeoutMs: number;
+    sendCatchAll: boolean;    // include catch-all domains in sends (default off — they bounce ~27%)
+  };
+
+  /** Instant 1:1 acknowledgement to positive replies (speed-to-lead). */
+  autoResponder: {
+    enabled: boolean;
+    includeBookingLink: boolean;   // off by default — reply-only policy asks for phone + time
   };
 
   /** IMAP polling for bounce/NDR processing (plain mailboxes have no webhook). */
@@ -294,6 +301,12 @@ export function getConfig(): Readonly<KeresConfig> {
     verify: {
       smtpProbe: bool('ENABLE_SMTP_VERIFY', true),
       smtpTimeoutMs: num('SMTP_VERIFY_TIMEOUT_MS', 8000),
+      sendCatchAll: bool('VERIFY_SEND_CATCH_ALL', false),
+    },
+
+    autoResponder: {
+      enabled: bool('ENABLE_AUTO_RESPONDER', true),
+      includeBookingLink: bool('AUTO_RESPONDER_BOOKING_LINK', false),
     },
 
     imap: {

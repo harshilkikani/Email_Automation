@@ -27,4 +27,35 @@ describe('FreeVerifier', () => {
     const r = await v.verify('info@business.com');
     expect(['role', 'unknown']).toContain(r.status);
   });
+  it('marks valid when the real mailbox is accepted but a bogus one is not', async () => {
+    const v = new FreeVerifier({
+      resolveMx: async () => ['mail.business.com'],
+      enableSmtp: true,
+      smtpProbe: async (email) => !email.startsWith('kr-verify-'),   // real accepted, bogus rejected
+    });
+    const r = await v.verify('owner@business.com');
+    expect(r.status).toBe('valid');
+  });
+  it('detects catch-all when a guaranteed-nonexistent mailbox is also accepted', async () => {
+    const probed: string[] = [];
+    const v = new FreeVerifier({
+      resolveMx: async () => ['mail.catchall.com'],
+      enableSmtp: true,
+      smtpProbe: async (email) => { probed.push(email); return true; },   // accepts everything
+    });
+    const r = await v.verify('owner@catchall.com');
+    expect(r.status).toBe('catch_all');
+    expect(probed.some(e => e.startsWith('kr-verify-'))).toBe(true);   // it actually probed a bogus addr
+  });
+  it('does not waste a second probe when the real mailbox is rejected', async () => {
+    let calls = 0;
+    const v = new FreeVerifier({
+      resolveMx: async () => ['mail.business.com'],
+      enableSmtp: true,
+      smtpProbe: async () => { calls++; return false; },
+    });
+    const r = await v.verify('ghost@business.com');
+    expect(r.status).toBe('invalid');
+    expect(calls).toBe(1);
+  });
 });

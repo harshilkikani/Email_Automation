@@ -130,6 +130,8 @@ export const leads = pgTable('leads', {
   discoveredAt: timestamp('discovered_at', { withTimezone: true }).notNull().defaultNow(),
   lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
   lastContactedAt: timestamp('last_contacted_at', { withTimezone: true }),
+  /* Set when the instant auto-responder acknowledges a positive reply (one per lead). */
+  autoRespondedAt: timestamp('auto_responded_at', { withTimezone: true }),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   /* generated dedupe keys */
   dedupEmail: citext('dedup_email').generatedAlwaysAs(sql`lower(email)`),

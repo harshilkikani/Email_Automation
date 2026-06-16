@@ -47,7 +47,13 @@ export function getVerifier(): VerificationProvider {
 const UNSENDABLE_STATUSES = new Set(['invalid', 'disposable']);
 
 export function isSendableStatus(status: string | null | undefined): boolean {
-  return !UNSENDABLE_STATUSES.has(status ?? '');
+  const s = status ?? '';
+  if (UNSENDABLE_STATUSES.has(s)) return false;
+  /* Catch-all domains accept every RCPT but still bounce ~27% — a real threat to
+     a single low-volume domain (sustained >2% bounce is a domain-wide spam
+     trigger). Exclude them unless explicitly opted in via VERIFY_SEND_CATCH_ALL. */
+  if (s === 'catch_all' && !getConfig().verify.sendCatchAll) return false;
+  return true;
 }
 
 /** Test seam. */
