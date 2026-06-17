@@ -296,7 +296,7 @@ export default function ScrapeSend() {
             )}
             {source !== 'mass' && (
               <div className="field"><label className="field-label">How many</label>
-                <input className="field-input" type="number" min={5} max={50} value={count} onChange={e => setCount(Number(e.target.value))} disabled={phase !== 'form'} /></div>
+                <input className="field-input" type="number" min={1} max={50} value={count} onChange={e => setCount(Number(e.target.value))} disabled={phase !== 'form'} /></div>
             )}
             <div className="field"><label className="field-label">Follow-ups</label>
               <select className="field-input" value={followups} onChange={e => setFollowups(Number(e.target.value))} disabled={phase !== 'form'}>

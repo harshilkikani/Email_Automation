@@ -35,6 +35,8 @@ export interface AudienceFilter {
   city?: string;
   minScore?: number;
   status?: 'all' | 'uncontacted' | 'new';
+  /** Cap the number of recipients staged (the highest-score leads are kept). */
+  limit?: number;
   leadIds?: string[];
   stratified?: keyof typeof REACH_SAMPLE | keyof typeof ENGAGEMENT_SAMPLE | 'reach' | 'engagement';
   insertSeedlist?: boolean;
@@ -133,9 +135,15 @@ export async function resolveAudience(
     }
     return { leadIds: idList, bucketByLeadId: buckets };
   }
+  /* Honor a batch cap: keep the highest-score leads so "send to N" means N best,
+     not the whole pool. Without this the niche/status filter stages everything. */
+  let selected = withEmail;
+  if (filter.limit && filter.limit > 0 && selected.length > filter.limit) {
+    selected = [...selected].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, filter.limit);
+  }
   const buckets: Record<string, string | null> = {};
-  for (const r of withEmail) buckets[r.id] = bucketFor(r.score);
-  return { leadIds: withEmail.map(r => r.id), bucketByLeadId: buckets };
+  for (const r of selected) buckets[r.id] = bucketFor(r.score);
+  return { leadIds: selected.map(r => r.id), bucketByLeadId: buckets };
 }
 
 export async function buildRecipients(db: Database, campaignId: string): Promise<number> {

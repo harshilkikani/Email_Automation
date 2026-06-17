@@ -48,7 +48,7 @@ export async function quickScrape(db: Database, input: QuickScrapeInput): Promis
   /* Target every matching UNCONTACTED lead (new + already-saved), so a re-scrape
      of the same trade/city still surfaces leads instead of 0 after dedupe. */
   return stageAndReview(db, input, `${input.city}, ${input.state.toUpperCase()}`,
-    { niche: input.niche, city: input.city, state: input.state, status: 'uncontacted' }, disc.found, disc.inserted);
+    { niche: input.niche, city: input.city, state: input.state, status: 'uncontacted', limit: clamp(input.count ?? 15, 1, 100) }, disc.found, disc.inserted);
 }
 
 /** Scrape & Send variant sourced from imported state-license lists (free niche data). */
@@ -203,7 +203,7 @@ export async function quickSweep(db: Database, input: SweepInput): Promise<Sweep
 export async function quickGet(db: Database, input: {
   orgId: string; niche: Niche; count?: number; followups?: number; stepDelayDays?: number;
 }): Promise<QuickScrapeResult> {
-  const target = clamp(input.count ?? 15, 5, 50);
+  const target = clamp(input.count ?? 15, 1, 50);
   /* Per-site enrichment (crawl + owner-find + MX-verify) dominates latency, so
      bound the whole batch by a wall-clock budget — a click is always snappy,
      and yields "up to N" (click again for more). Small perMetro keeps each
@@ -231,7 +231,7 @@ export async function quickGet(db: Database, input: {
     followups: input.followups, stepDelayDays: input.stepDelayDays,
   };
   return stageAndReview(db, qi, `${input.niche} — anywhere`,
-    { niche: input.niche, status: 'uncontacted' }, found, added);
+    { niche: input.niche, status: 'uncontacted', limit: target }, found, added);
 }
 
 /**
