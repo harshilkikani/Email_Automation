@@ -8,6 +8,7 @@ import { classifyReply } from '@keres/core';
 import { parseSnsNotification, shouldAutoSuppress } from '@keres/providers';
 import type { InboundEvent } from '@keres/providers';
 import { onInboundReply } from './reply-branches.js';
+import { maybeAutoRespond } from './auto-responder.js';
 
 /** Persist an SES SNS notification batch. Returns counts for the test harness. */
 export async function handleSesSns(db: Database, orgId: string, body: any): Promise<{ subscribed: boolean; events: number; suppressed: number; subscribeUrl?: string }> {
@@ -132,11 +133,13 @@ export async function handleInboundReply(db: Database, orgId: string, ev: Inboun
     if (lead) await db.update(schema.leads).set({ status: 'interested' }).where(eq(schema.leads.id, lead.id));
   }
 
-  /* Drive the reply-branch FSM. Best-effort — surfaced errors do not block
-     the inbound webhook ack. */
+  /* Drive the reply-branch FSM, then fire the instant auto-responder. Both are
+     best-effort — surfaced errors do not block the inbound webhook ack. */
   if (inserted[0]?.id) {
     try { await onInboundReply(db, inserted[0]!.id); }
     catch { /* swallow; tick will catch up */ }
+    try { await maybeAutoRespond(db, inserted[0]!.id); }
+    catch { /* swallow; never block the inbound ack on a send */ }
   }
 
   return { id: inserted[0]?.id ?? '', intent: classified.intent };

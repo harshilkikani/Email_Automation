@@ -8,14 +8,21 @@ interface DashboardMetrics {
   providers: { sampleMode: boolean; budgetMode: string };
 }
 
+interface LeadStats {
+  total: number; with_email: number; sendable: number; contacted: number;
+  today: number; week: number; byNiche: { k: string; n: number }[];
+}
+
 export default function Dashboard() {
   const nav = useNavigate();
   const [m, setM] = useState<DashboardMetrics | null>(null);
+  const [ls, setLs] = useState<LeadStats | null>(null);
   const [jobValue, setJobValue] = useState(800);
   const [closeRate, setCloseRate] = useState(30);
 
   useEffect(() => {
     api.get<DashboardMetrics>('/metrics/dashboard').then(r => { if (r.ok && r.data) setM(r.data); });
+    api.get<LeadStats>('/leads/stats').then(r => { if (r.ok && r.data) setLs(r.data); });
   }, []);
 
   const sent = m?.last24h.sent ?? 0;
@@ -59,20 +66,45 @@ export default function Dashboard() {
         </div>
       </div>
       <div className="container">
+        {/* Lead pool volume */}
         <div className="stat-grid">
           <div className="stat-card"><div className="label">Total leads</div>
-            <div className="value">{m?.totals.leads ?? '—'}</div></div>
-          <div className="stat-card accent"><div className="label">Fresh (7d)</div>
-            <div className="value">{m?.totals.freshLast7d ?? '—'}</div></div>
+            <div className="value">{ls ? ls.total.toLocaleString() : '—'}</div></div>
+          <div className="stat-card accent"><div className="label">Sendable (ready)</div>
+            <div className="value">{ls ? ls.sendable.toLocaleString() : '—'}</div></div>
+          <div className="stat-card"><div className="label">With email</div>
+            <div className="value">{ls ? ls.with_email.toLocaleString() : '—'}</div></div>
+          <div className="stat-card"><div className="label">Contacted</div>
+            <div className="value">{ls ? ls.contacted.toLocaleString() : '—'}</div></div>
+          <div className="stat-card"><div className="label">Added today</div>
+            <div className="value">{ls ? `+${ls.today.toLocaleString()}` : '—'}</div></div>
+          <div className="stat-card"><div className="label">This week</div>
+            <div className="value">{ls ? `+${ls.week.toLocaleString()}` : '—'}</div></div>
+        </div>
+
+        {/* 24h send activity */}
+        <div className="stat-grid">
           <div className="stat-card"><div className="label">Sent (24h)</div>
             <div className="value">{m?.last24h.sent ?? '—'}</div></div>
           <div className="stat-card"><div className="label">Delivered</div>
             <div className="value">{m?.last24h.delivered ?? '—'}</div></div>
-          <div className="stat-card"><div className="label">Replied</div>
+          <div className="stat-card accent"><div className="label">Replied</div>
             <div className="value">{m?.last24h.replied ?? '—'}</div></div>
           <div className="stat-card"><div className="label">Bounced</div>
             <div className="value">{m?.last24h.bounced ?? '—'}</div></div>
         </div>
+
+        {ls && ls.byNiche.length > 0 && (
+          <div className="panel" style={{ marginBottom: 14 }}>
+            <div className="panel-head"><h2>◆ Lead pool by trade</h2>
+              <span className="tbl-meta">filling automatically · {ls.byNiche.length} trades</span></div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {ls.byNiche.map(b => (
+                <span key={b.k} className="pill" style={{ fontSize: 12.5 }}>{b.k}: <strong>{b.n.toLocaleString()}</strong></span>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="builder-grid">
           <div>

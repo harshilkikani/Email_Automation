@@ -55,6 +55,8 @@ export interface KeresConfig {
     physicalAddress: string;
     outreachSubdomain: string;
     defaultBookingLink: string;
+    /** Sender personas rotated (stably per lead) for the From name + signoff. */
+    signoffNames: string[];
   };
 
   ses: {
@@ -92,6 +94,44 @@ export interface KeresConfig {
     dkimSelector: string;
   };
 
+  /** Background pool builder — auto-sweeps metros×niches to grow the lead pool. */
+  poolBuilder: { enabled: boolean };
+
+  /** Email verification policy. */
+  verify: {
+    smtpProbe: boolean;       // SMTP RCPT mailbox probe (free; catches dead mailboxes)
+    smtpTimeoutMs: number;
+    sendCatchAll: boolean;    // include catch-all domains in sends (default off — they bounce ~27%)
+  };
+
+  /** Instant 1:1 acknowledgement to positive replies (speed-to-lead). */
+  autoResponder: {
+    enabled: boolean;
+    includeBookingLink: boolean;   // off by default — reply-only policy asks for phone + time
+  };
+
+  /** Defer sends to land during the recipient's local business hours (~10am). */
+  localSendTiming: {
+    enabled: boolean;
+  };
+
+  /** Background re-verification of the existing pool (catch dead/catch-all mailboxes). */
+  reverify: {
+    enabled: boolean;
+    batch: number;
+  };
+
+  /** IMAP polling for bounce/NDR processing (plain mailboxes have no webhook). */
+  imap: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    user: string;
+    pass: string;
+    /** Save a copy of every sent message into the mailbox "Sent" folder. */
+    saveToSent: boolean;
+  };
+
   postmarkInbound: {
     enabled: boolean;
     token: string;
@@ -109,6 +149,8 @@ export interface KeresConfig {
 
   yelp: { enabled: boolean; apiKey: string; monthlyBudgetUsd: number };
   places: { enabled: boolean; apiKey: string; monthlyBudgetUsd: number };
+  foursquare: { enabled: boolean; apiKey: string; baseUrl: string; apiVersion: string };
+  websearch: { enabled: boolean; braveApiKey: string };
   hunter: { enabled: boolean; apiKey: string; monthlyFreeCredits: number };
   bouncer: { enabled: boolean; apiKey: string; monthlyBudgetCents: number };
 
@@ -148,6 +190,8 @@ export interface KeresConfig {
     ollamaUrl: string;
     ollamaModel: string;
     requestTimeoutMs: number;
+    /** When true, the batch tick generates fact-grounded personalized openers. */
+    personalization: boolean;
   };
 
   /**
@@ -225,6 +269,8 @@ export function getConfig(): Readonly<KeresConfig> {
       physicalAddress: str('PHYSICAL_ADDRESS', ''),
       outreachSubdomain: str('OUTREACH_SUBDOMAIN', 'outreach.keresai.com'),
       defaultBookingLink: str('DEFAULT_BOOKING_LINK', 'https://cal.keresai.com/intro'),
+      signoffNames: (str('SIGNOFF_NAMES') || 'Jake,Sarah,Marcus,Emily,Dan,Rachel,Chris,Megan')
+        .split(',').map(s => s.trim()).filter(Boolean),
     },
 
     ses: {
@@ -261,6 +307,37 @@ export function getConfig(): Readonly<KeresConfig> {
       dkimSelector: str('SMTP_DKIM_SELECTOR', 'spacemail'),
     },
 
+    poolBuilder: { enabled: bool('ENABLE_POOL_BUILDER', false) },
+
+    verify: {
+      smtpProbe: bool('ENABLE_SMTP_VERIFY', true),
+      smtpTimeoutMs: num('SMTP_VERIFY_TIMEOUT_MS', 8000),
+      sendCatchAll: bool('VERIFY_SEND_CATCH_ALL', false),
+    },
+
+    autoResponder: {
+      enabled: bool('ENABLE_AUTO_RESPONDER', true),
+      includeBookingLink: bool('AUTO_RESPONDER_BOOKING_LINK', false),
+    },
+
+    localSendTiming: {
+      enabled: bool('ENABLE_LOCAL_SEND_TIMING', true),
+    },
+
+    reverify: {
+      enabled: bool('ENABLE_REVERIFY', true),
+      batch: num('REVERIFY_BATCH', 20),
+    },
+
+    imap: {
+      enabled: bool('ENABLE_BOUNCE_PROCESSING', false),
+      host: str('IMAP_HOST') || str('SMTP_HOST', 'mail.spacemail.com'),
+      port: num('IMAP_PORT', 993),
+      user: str('IMAP_USER') || str('SMTP_USER'),
+      pass: str('IMAP_PASS') || str('SMTP_PASS'),
+      saveToSent: bool('SAVE_TO_SENT', true),
+    },
+
     postmarkInbound: {
       enabled: bool('ENABLE_POSTMARK_INBOUND', false),
       token: str('POSTMARK_INBOUND_TOKEN'),
@@ -278,6 +355,8 @@ export function getConfig(): Readonly<KeresConfig> {
 
     yelp:    { enabled: bool('ENABLE_YELP', false),    apiKey: str('YELP_API_KEY'),    monthlyBudgetUsd: num('YELP_MONTHLY_BUDGET_USD', 0) },
     places:  { enabled: bool('ENABLE_PLACES', false),  apiKey: str('PLACES_API_KEY'),  monthlyBudgetUsd: num('PLACES_MONTHLY_BUDGET_USD', 0) },
+    foursquare: { enabled: bool('ENABLE_FOURSQUARE', false), apiKey: str('FOURSQUARE_API_KEY'), baseUrl: str('FOURSQUARE_BASE_URL', 'https://places-api.foursquare.com/places/search'), apiVersion: str('FOURSQUARE_API_VERSION', '2025-06-17') },
+    websearch: { enabled: bool('ENABLE_WEBSEARCH', true), braveApiKey: str('BRAVE_API_KEY') },   // Brave API = reliable; else DDG best-effort (blocked from servers)
     hunter:  { enabled: bool('ENABLE_HUNTER', false),  apiKey: str('HUNTER_API_KEY'),  monthlyFreeCredits: num('HUNTER_MONTHLY_FREE_CREDITS', 50) },
     bouncer: { enabled: bool('ENABLE_BOUNCER', false), apiKey: str('BOUNCER_API_KEY'), monthlyBudgetCents: num('BOUNCER_MONTHLY_BUDGET_USD', 5) * 100 },
 
@@ -310,6 +389,7 @@ export function getConfig(): Readonly<KeresConfig> {
       ollamaUrl: str('OLLAMA_URL', 'http://localhost:11434'),
       ollamaModel: str('OLLAMA_MODEL', 'llama3.1:8b-instruct-q4_K_M'),
       requestTimeoutMs: num('AI_REQUEST_TIMEOUT_MS', 60_000),
+      personalization: bool('AI_PERSONALIZATION', false),
     },
 
     closedLoopAutoApply: bool('CLOSED_LOOP_AUTO_APPLY', false),

@@ -50,6 +50,10 @@ async function main() {
           },
         },
     bodyLimit: 10 * 1024 * 1024,
+    /* Signed unsubscribe tokens are ~200 chars and ride in a path param
+       (/api/unsubscribe/:token). Fastify's default maxParamLength is 100, which
+       silently 404s every real unsubscribe link — raise it. */
+    maxParamLength: 1024,
     /* Don't expose the framework. */
     disableRequestLogging: cfg.nodeEnv === 'production',
   });

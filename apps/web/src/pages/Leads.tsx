@@ -177,6 +177,20 @@ export default function Leads() {
               ) : <p className="panel-desc">No signal contributions captured yet.</p>}
             </div>
             <div className="panel">
+              <h3 style={{ fontSize: 13, marginBottom: 10 }}>Personalized opener</h3>
+              {drawer.signals?.personalizedOpener ? (
+                <>
+                  <p className="panel-desc" style={{ fontStyle: 'italic' }}>“{drawer.signals.personalizedOpener}”</p>
+                  <div className="kv"><span className="k">based on</span><span className="v">{drawer.signals.personalizationFact ?? '—'} · {drawer.signals.personalizationModel ?? '—'}</span></div>
+                </>
+              ) : <p className="panel-desc">No personalized opener yet — the template's deterministic opener will be used.</p>}
+              <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={async () => {
+                const r = await api.post<{ opener: string | null }>(`/leads/${drawer.lead.id}/regenerate-opener`);
+                if (r.ok) { t.push(r.data?.opener ? 'success' : 'warn', r.data?.opener ? 'Opener regenerated' : 'No specific gap found for this lead'); openDrawer(drawer.lead.id); }
+                else t.push('error', 'Regenerate failed', r.error);
+              }}>Regenerate</button>
+            </div>
+            <div className="panel">
               <h3 style={{ fontSize: 13, marginBottom: 10 }}>Contact</h3>
               <div className="kv"><span className="k">Email</span><span className="v">{drawer.lead.email ?? '—'}</span></div>
               <div className="kv"><span className="k">Phone</span><span className="v">{drawer.lead.phone ?? '—'}</span></div>

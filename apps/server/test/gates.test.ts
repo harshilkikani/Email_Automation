@@ -33,13 +33,23 @@ describe('canSend gates', () => {
     expect(r.blockers).toEqual([]);
   });
 
-  it('blocks if SES production access not confirmed', () => {
+  it('blocks if SES production access not confirmed (SES provider only)', () => {
+    const org = baseOrg(); org.productionAccessConfirmed = false;
+    const r = canSend({ org, domain: baseDomain(), campaign: baseCamp(),
+      stats: { sent: 0, bounced: 0, complained: 0 },
+      bouncePausePct: 4, complaintPausePct: 0.1, unsubscribeReachable: true,
+      requireSesProductionAccess: true });
+    expect(r.ok).toBe(false);
+    expect(r.blockers.some(b => b.code === 'no_production_access')).toBe(true);
+  });
+
+  it('does NOT require SES production access for non-SES providers (SMTP)', () => {
     const org = baseOrg(); org.productionAccessConfirmed = false;
     const r = canSend({ org, domain: baseDomain(), campaign: baseCamp(),
       stats: { sent: 0, bounced: 0, complained: 0 },
       bouncePausePct: 4, complaintPausePct: 0.1, unsubscribeReachable: true });
-    expect(r.ok).toBe(false);
-    expect(r.blockers.some(b => b.code === 'no_production_access')).toBe(true);
+    expect(r.blockers.some(b => b.code === 'no_production_access')).toBe(false);
+    expect(r.ok).toBe(true);
   });
 
   it('blocks if physical address missing', () => {

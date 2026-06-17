@@ -32,8 +32,11 @@ export function hardFilter(ctx: HardFilterContext): DisqualificationDecision {
   if (!c.name || c.name.trim().length === 0) {
     return { ok: false, reason: 'no_name', detail: 'Candidate has no business name' };
   }
-  if (!c.phone) {
-    return { ok: false, reason: 'no_phone', detail: 'No phone in listing' };
+  /* Need SOME way to reach them. A website is enough (we scrape it for the
+     email) — requiring a phone here was silently dropping every website-only
+     and web-search (Brave) business, which have a site but no phone in-listing. */
+  if (!c.phone && !c.website && !c.email) {
+    return { ok: false, reason: 'no_contact', detail: 'No phone, website, or email' };
   }
 
   /* UPS / mailbox addresses */
@@ -59,8 +62,22 @@ export function hardFilter(ctx: HardFilterContext): DisqualificationDecision {
     return { ok: false, reason: 'nonprofit', detail: 'Nonprofit / religious org' };
   }
 
+  /* Niche relevance: web-search/Places sometimes return businesses in an
+     unrelated industry (a lawyer-referral or accounting firm tagged "Plumber").
+     Emailing them is wasted + raises spam risk, so drop obvious off-industry
+     names for the trade niches (Real Estate keeps realty/realtor terms). */
+  if (TRADE_NICHES.has(ctx.niche) && OFF_INDUSTRY.test(c.name)) {
+    return { ok: false, reason: 'off_niche', detail: 'Name indicates a non-target industry' };
+  }
+
   return { ok: true };
 }
+
+const TRADE_NICHES = new Set(['Septic', 'Roofer', 'Water/Mold', 'HVAC', 'Plumber', 'Electrician', 'Towing',
+  'Pest Control', 'Garage Door', 'Locksmith', 'Appliance Repair', 'Pool Service', 'Landscaping',
+  'Painter', 'Carpet Cleaning', 'Handyman', 'Tree Service',
+  'Fencing', 'Concrete', 'Moving', 'Junk Removal', 'Window Cleaning', 'Pressure Washing', 'Solar', 'Flooring']);
+const OFF_INDUSTRY = /\b(law|lawyer|attorney|attorneys|legal|paralegal|accounting|accountant|cpa|bookkeep|tax service|insurance|realty|realtor|real estate|dental|dentist|orthodont|medical|physician|clinic|hospital|pharmacy|chiropract|salon|spa|barber|nail|restaurant|cafe|café|bakery|catering|coffee|brewery|bank|credit union|mortgage|\bloan|financial|school|university|college|academy|daycare|staffing|recruit|notary|process serv|security (?:service|guard)|referral service|marketing|advertising|web design|software|\bit services\b|consulting|travel agency|funeral|veterinary|\bvet\b|\btv\b|television|\bchannel\b|\bnews\b|\bradio\b|broadcast|\bmedia\b|newspaper|magazine|museum|library|\bgov\b|municipal|city of|county of)\b/i;
 
 const US_STATES = new Set([
   'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',
@@ -74,11 +91,39 @@ export function emailIntakeFilter(email: string | null | undefined): { ok: boole
   if (!email) return { ok: true };
   const lower = email.toLowerCase().trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lower)) return { ok: false, reason: 'invalid_syntax' };
+  const local = lower.split('@')[0] ?? '';
   const domain = lower.split('@')[1] ?? '';
+  const tld = domain.split('.').pop() ?? '';
   if (DISPOSABLE_DOMAINS.has(domain)) return { ok: false, reason: 'disposable_domain' };
+  /* Scraped HTML often yields garbage that is syntactically an email but will
+     always bounce — every bounce hurts sender reputation, so drop these hard:
+       • placeholder/example addresses from form hints ("user@domain.com",
+         "j.doe@inbox.com", "you@example.com"),
+       • asset filenames matched as emails ("logo@2x.png", "icon@sprite.svg"). */
+  if (ASSET_EXTS.has(tld)) return { ok: false, reason: 'asset_filename' };
+  if (PLACEHOLDER_DOMAINS.has(domain)) return { ok: false, reason: 'placeholder_domain' };
+  if (PLACEHOLDER_LOCALS.has(local)) return { ok: false, reason: 'placeholder_local' };
   /* role accounts are warnings, not hard fails: handled at verification time. */
   return { ok: true };
 }
+
+const ASSET_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp', 'css', 'js', 'mp4', 'pdf']);
+
+/* ONLY unambiguous placeholders — never a real business domain (business.com,
+   email.com, name.com etc. are real and must NOT be here). */
+const PLACEHOLDER_DOMAINS = new Set([
+  'example.com', 'example.org', 'example.net', 'example.edu', 'domain.com', 'domain.tld',
+  'yourdomain.com', 'your-domain.com', 'yourcompany.com', 'your-company.com', 'mycompany.com',
+  'mydomain.com', 'yoursite.com', 'yourwebsite.com', 'companyname.com',
+  'wixpress.com', 'sentry.io', 'sentry-next.wixpress.com',
+]);
+
+const PLACEHOLDER_LOCALS = new Set([
+  'user', 'username', 'user1', 'name', 'firstname', 'lastname', 'firstname.lastname', 'first.last',
+  'name.surname', 'johndoe', 'john.doe', 'j.doe', 'janedoe', 'jane.doe', 'jane.smith', 'john.smith',
+  'email', 'your.email', 'youremail', 'yourname', 'your.name', 'example', 'sample', 'demo',
+  'test', 'test.test', 'test.email', 'someone', 'somebody', 'abc', 'xyz',
+]);
 
 const DISPOSABLE_DOMAINS = new Set([
   'mailinator.com', '10minutemail.com', 'guerrillamail.com', 'tempmail.com',

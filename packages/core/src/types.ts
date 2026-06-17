@@ -8,11 +8,33 @@ export type Niche =
   | 'Plumber'
   | 'Electrician'
   | 'Towing'
-  | 'Real Estate';
+  | 'Real Estate'
+  | 'Pest Control'
+  | 'Garage Door'
+  | 'Locksmith'
+  | 'Appliance Repair'
+  | 'Pool Service'
+  | 'Landscaping'
+  | 'Painter'
+  | 'Carpet Cleaning'
+  | 'Handyman'
+  | 'Tree Service'
+  | 'Fencing'
+  | 'Concrete'
+  | 'Moving'
+  | 'Junk Removal'
+  | 'Window Cleaning'
+  | 'Pressure Washing'
+  | 'Solar'
+  | 'Flooring';
 
 export const ALL_NICHES: Niche[] = [
   'Septic', 'Water/Mold', 'HVAC', 'Roofer',
   'Plumber', 'Electrician', 'Towing', 'Real Estate',
+  'Pest Control', 'Garage Door', 'Locksmith', 'Appliance Repair',
+  'Pool Service', 'Landscaping', 'Painter', 'Carpet Cleaning',
+  'Handyman', 'Tree Service', 'Fencing', 'Concrete', 'Moving',
+  'Junk Removal', 'Window Cleaning', 'Pressure Washing', 'Solar', 'Flooring',
 ];
 
 export type WebPresenceLevel = 'none' | 'social_only' | 'gbp_only' | 'basic' | 'modern' | 'unknown';
@@ -50,6 +72,8 @@ export interface LeadCandidate {
   niche: Niche;
   source: string;
   sourceExternalId?: string | null;
+  /** Star rating normalized to 0–5 from the discovery source (targeting signal). */
+  rating?: number | null;
 }
 
 export interface ScoringInputs {

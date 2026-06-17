@@ -8,13 +8,15 @@ import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import {
   addToIndex, checkDuplicate, makeIndex, hardFilter,
-  type Niche, type ScoringInputs, type WebPresenceLevel,
+  type Niche, type ScoringInputs, type WebPresenceLevel, type LeadCandidate,
 } from '@keres/core';
 import { scoreLeadEnhanced } from './scoring.js';
 import {
-  OsmAdapter, OsmSampleAdapter, type DiscoveryProvider,
+  OsmAdapter, OsmSampleAdapter, PlacesAdapter, FoursquareAdapter, WebSearchAdapter, type DiscoveryProvider,
   YelpAdapter, Scraper, classifyPhone, LicenseRegistry,
 } from '@keres/providers';
+import { getVerifier } from './verify.js';
+import { findOwnerEmail } from './owner-finder.js';
 import { getConfig } from '../config.js';
 import { lookupLicense } from './license-importer.js';
 
@@ -32,6 +34,8 @@ export interface RunDiscoveryOutput {
   duplicates: number;
   disqualified: number;
   attribution: string;
+  /** IDs of the leads inserted this run (for targeting the exact batch). */
+  leadIds: string[];
 }
 
 export async function runDiscovery(db: Database, input: RunDiscoveryInput): Promise<RunDiscoveryOutput> {
@@ -42,10 +46,39 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
   const yelp = new YelpAdapter({ enabled: cfg.yelp.enabled && !cfg.sampleMode, apiKey: cfg.yelp.apiKey });
   const scraper = new Scraper({ enabled: !cfg.sampleMode, userAgent: cfg.osm.userAgent });
   const licenses = new LicenseRegistry(cfg.sampleMode);
+  const verifier = getVerifier();
 
-  const { candidates: rawCandidates, attribution = '' } = await osm.search({
-    niche: input.niche, city: input.city, state: input.state, targetCount: input.targetCount * 2,
-  });
+  /* Multi-source discovery: aggregate every enabled provider so we get the most
+     real businesses (with websites) per run. Order = best coverage first; OSM is
+     the always-on free fallback. Cross-source + DB dedupe happens in the main
+     loop below via the dedupe index. */
+  const places = new PlacesAdapter({ enabled: cfg.places.enabled && !cfg.sampleMode, apiKey: cfg.places.apiKey });
+  const foursquare = new FoursquareAdapter({ enabled: cfg.foursquare.enabled && !cfg.sampleMode, apiKey: cfg.foursquare.apiKey, baseUrl: cfg.foursquare.baseUrl, apiVersion: cfg.foursquare.apiVersion });
+  const websearch = new WebSearchAdapter({ enabled: cfg.websearch.enabled && !cfg.sampleMode, userAgent: cfg.osm.userAgent, braveApiKey: cfg.websearch.braveApiKey || undefined });
+  const sources: DiscoveryProvider[] = [];
+  if (places.isEnabled()) sources.push(places);
+  if (foursquare.isEnabled()) sources.push(foursquare);
+  if (websearch.isEnabled()) sources.push(websearch);   // free, best-effort
+  sources.push(osm);   // free, always (sample adapter in sample mode)
+
+  const want = input.targetCount * 2;
+  const rawCandidates: LeadCandidate[] = [];
+  const attributions = new Set<string>();
+  for (const src of sources) {
+    if (rawCandidates.length >= want) break;
+    try {
+      const r = await src.search({ niche: input.niche, city: input.city, state: input.state, targetCount: want });
+      rawCandidates.push(...r.candidates);
+      if (r.attribution) attributions.add(r.attribution);
+      const costCents = (r as { costCents?: number }).costCents ?? 0;
+      if (costCents > 0) {
+        await db.insert(schema.costEvents).values({
+          orgId: input.orgId, provider: src.name, sku: 'discovery_search', unitCount: 1, costCents,
+        }).catch(() => undefined);
+      }
+    } catch { /* one source failing shouldn't abort discovery */ }
+  }
+  const attribution = [...attributions].join(' ');
 
   /* Build dedupe index from existing leads. */
   const idx = makeIndex();
@@ -58,6 +91,7 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
     .from(schema.leads)
     .where(eq(schema.leads.orgId, input.orgId));
   for (const e of existing) addToIndex(idx, e);
+  const insertedLeadIds: string[] = [];
 
   let inserted = 0, duplicates = 0, disqualified = 0;
 
@@ -75,7 +109,29 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
     const probe = scraper.isEnabled()
       ? await scraper.probe(cand.website ?? '')
       : { webPresenceLevel: cand.website ? 'basic' : 'none', emails: [], hasOnlineBooking: false, deadDomain: false, evidence: { sample: true } } as { webPresenceLevel: WebPresenceLevel; emails: string[]; hasOnlineBooking: boolean; deadDomain: boolean; evidence: Record<string, unknown> };
-    if (probe.emails.length > 0 && !cand.email) cand.email = probe.emails[0] ?? null;
+    /* Owner / decision-maker + best-email finder (Apollo/Hunter-style): deep-crawl
+       the site, find the owner's name, detect the email pattern, choose the best
+       address, and MX-verify it. Falls back to the first scraped email. */
+    let ownerName: string | null = null;
+    let emailKind: string | null = null;
+    let emailStatus: string | null = null;
+    let emailSource: string | null = null;
+    if (cand.website) {
+      const owner = await findOwnerEmail(scraper, cand.website, probe.emails);
+      if (owner.email) cand.email = owner.email;
+      else if (probe.emails[0] && !cand.email) cand.email = probe.emails[0];
+      ownerName = owner.ownerName;
+      emailKind = owner.emailSource;
+      emailStatus = owner.verifyStatus;
+      emailSource = owner.verifySource;
+    } else if (probe.emails[0] && !cand.email) {
+      cand.email = probe.emails[0];
+    }
+    /* Verify if the finder didn't (e.g., no website crawl). */
+    if (cand.email && !emailStatus) {
+      try { const v = await verifier.verify(cand.email); emailStatus = v.status; emailSource = v.source; }
+      catch { emailStatus = 'unknown'; emailSource = 'skipped'; }
+    }
 
     /* Prefer DB-backed lookup against `state_licensees` (populated via CSV
        importer per LICENSE-SOURCES.md). Fall back to the sample/stub adapter
@@ -97,6 +153,9 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
         if (y.rating !== null) reviewRating = y.rating;
       } catch { /* ignore */ }
     }
+    /* Foursquare rating fallback (0–5, normalized by the adapter). Used for scoring
+       + lead-prioritization; the email never asserts it as their Google rating. */
+    if (reviewRating === null && typeof cand.rating === 'number') reviewRating = cand.rating;
 
     const isStormZone = await isInStormZone(db, cand.postalCode);
 
@@ -140,13 +199,20 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
       niche: cand.niche,
       source: cand.source,
       sourceExternalId: cand.sourceExternalId ?? null,
+      ownerName,
+      emailSource: emailKind,
+      emailVerificationStatus: emailStatus,
+      emailVerificationSource: emailSource,
       status: 'new',
       score: scored.score,
       scoringVersion: scored.scoringVersion,
       confidence: scored.confidence,
       disqualified: scored.disqualified,
       disqualificationReason: scored.disqualificationReason ?? null,
-    }).returning({ id: schema.leads.id });
+      /* An email can collide on the (org,email) unique index when it's only
+         discovered DURING scraping (after the upfront dedupe check). Skip it
+         gracefully instead of throwing and aborting the whole metro sweep. */
+    }).onConflictDoNothing().returning({ id: schema.leads.id });
 
     const leadId = inserted2[0]?.id;
     if (!leadId) continue;
@@ -178,6 +244,7 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
     });
 
     addToIndex(idx, cand);
+    insertedLeadIds.push(leadId);
     inserted++;
   }
 
@@ -187,6 +254,7 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
     duplicates,
     disqualified,
     attribution,
+    leadIds: insertedLeadIds,
   };
 }
 

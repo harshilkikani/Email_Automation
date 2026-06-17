@@ -13,5 +13,7 @@ export * from './saturation.js';
 export * from './reply-fsm.js';
 export * from './website-intel.js';
 export * from './warmup.js';
+export * from './personalization.js';
+export * from './email-finder.js';
 export * from './ai.js';
 export * from './decision.js';

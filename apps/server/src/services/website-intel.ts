@@ -11,6 +11,7 @@
  */
 import { and, eq, isNull, sql, desc } from 'drizzle-orm';
 import { request } from 'undici';
+import { lookup } from 'node:dns/promises';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import type { FastifyBaseLogger } from 'fastify';
@@ -19,8 +20,23 @@ import { getConfig } from '../config.js';
 import { obs } from '../observability.js';
 
 const PROBE_PATHS = ['', '/contact', '/about', '/services'];
-const PER_REQUEST_TIMEOUT_MS = 8_000;
+const PER_REQUEST_TIMEOUT_MS = 6_000;
 const MAX_BYTES_PER_PAGE = 1_500_000;
+
+function hostnameOf(url: string): string | null {
+  try { return new URL(url).hostname; } catch { return null; }
+}
+/** Skip non-resolving domains so we don't eat 4× sequential fetch timeouts on dead
+ *  sites (~a third are dead). Conservative: only a definitive ENOTFOUND counts as dead. */
+async function domainResolves(hostname: string, timeoutMs = 2_500): Promise<boolean> {
+  try {
+    await Promise.race([
+      lookup(hostname),
+      new Promise<never>((_, rej) => { const t = setTimeout(() => rej(new Error('dns_timeout')), timeoutMs); t.unref?.(); }),
+    ]);
+    return true;
+  } catch (e) { return (e as Error)?.message === 'dns_timeout'; }
+}
 
 export interface FetchedPage {
   url: string;
@@ -48,6 +64,12 @@ export async function refreshWebsiteIntelForLead(
   if (!lead.website) return { ok: false, reason: 'no_website' };
   const fetcher = opts.fetcher ?? defaultFetcher;
   const baseUrl = normalizeUrl(lead.website);
+  /* Dead-domain short-circuit: skip the whole crawl if DNS doesn't resolve. */
+  const host = hostnameOf(baseUrl);
+  if (host && !opts.fetcher && !(await domainResolves(host))) {
+    await upsertIntel(db, lead, { ...emptyIntel(), evidence: { reason: 'dns_unresolved', baseUrl } }, baseUrl, baseUrl, 0);
+    return { ok: false, reason: 'dns_unresolved' };
+  }
   const budgetMs = opts.budgetMs ?? 25_000;
   const deadline = Date.now() + budgetMs;
 
@@ -156,8 +178,9 @@ async function defaultFetcher(url: string): Promise<FetchedPage> {
     method: 'GET',
     maxRedirections: 4,
     headers: { 'User-Agent': cfg.osm.userAgent || 'KeresAI/0.1' },
-    headersTimeout: PER_REQUEST_TIMEOUT_MS,
+    headersTimeout: 5_000,
     bodyTimeout: PER_REQUEST_TIMEOUT_MS,
+    signal: AbortSignal.timeout(PER_REQUEST_TIMEOUT_MS),   // hard total cap incl. connect
   });
   let bytes = 0;
   const chunks: Buffer[] = [];

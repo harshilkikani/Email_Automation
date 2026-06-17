@@ -7,9 +7,11 @@ import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import {
   bucketFor, REACH_SAMPLE, ENGAGEMENT_SAMPLE, stratifiedSample,
-  defaultTemplateFor, renderEmail, TEMPLATES, type Template,
+  defaultTemplateFor, renderEmail, pickSignoffName, TEMPLATES, type Template,
 } from '@keres/core';
 import { finalRender, lintEmail } from '@keres/email';
+import { isSendableStatus } from './verify.js';
+import { getFocus, recipientPriority } from './focus.js';
 import { getConfig } from '../config.js';
 import { canSend, type GateInput, type GateResult } from './gates.js';
 
@@ -21,6 +23,8 @@ export interface CampaignDraftInput {
   subjectA?: string;
   subjectB?: string;
   audienceFilter: AudienceFilter;
+  sequenceSteps?: number;
+  stepDelayDays?: number;
   senderDomainId?: string;
   validationExperimentId?: string;
 }
@@ -31,6 +35,8 @@ export interface AudienceFilter {
   city?: string;
   minScore?: number;
   status?: 'all' | 'uncontacted' | 'new';
+  /** Cap the number of recipients staged (the highest-score leads are kept). */
+  limit?: number;
   leadIds?: string[];
   stratified?: keyof typeof REACH_SAMPLE | keyof typeof ENGAGEMENT_SAMPLE | 'reach' | 'engagement';
   insertSeedlist?: boolean;
@@ -45,19 +51,65 @@ export async function createCampaign(db: Database, input: CampaignDraftInput): P
     subjectA: input.subjectA ?? '',
     subjectB: input.subjectB ?? null,
     audienceFilter: input.audienceFilter as unknown as Record<string, unknown>,
+    sequenceSteps: Math.max(1, Math.min(input.sequenceSteps ?? 1, 5)),
+    stepDelayDays: Math.max(1, Math.min(input.stepDelayDays ?? 3, 30)),
     senderDomainId: input.senderDomainId ?? null,
     validationExperimentId: input.validationExperimentId ?? null,
   }).returning({ id: schema.campaigns.id });
   return { id: row[0]!.id };
 }
 
+/** Every email address we've already SENT to (any campaign) — a hard guard so
+    no address is ever contacted twice, even if a lead's status update failed. */
+async function alreadySentEmails(db: Database, orgId: string): Promise<Set<string>> {
+  const rows = await db.select({ email: schema.leads.email })
+    .from(schema.emailEvents)
+    .innerJoin(schema.leads, eq(schema.leads.id, schema.emailEvents.leadId))
+    .where(and(eq(schema.emailEvents.orgId, orgId), eq(schema.emailEvents.eventType, 'send')));
+  return new Set(rows.map(r => (r.email ?? '').toLowerCase()).filter(Boolean));
+}
+
+/** Every DOMAIN we've already sent to — so we never email two addresses at the
+    same company (a different kind of duplicate than the same address twice). */
+async function alreadySentDomains(db: Database, orgId: string): Promise<Set<string>> {
+  const rows = await db.select({ domain: schema.leads.domain })
+    .from(schema.emailEvents)
+    .innerJoin(schema.leads, eq(schema.leads.id, schema.emailEvents.leadId))
+    .where(and(eq(schema.emailEvents.orgId, orgId), eq(schema.emailEvents.eventType, 'send')));
+  return new Set(rows.map(r => (r.domain ?? '').toLowerCase()).filter(Boolean));
+}
+
+/** Keep at most one lead per email AND per domain, skipping anything already
+    sent — the single choke point that guarantees no duplicate ever gets emailed. */
+function pickUncontacted<T extends { id: string; email: string | null; ev: string | null; domain?: string | null }>(
+  rows: T[], sentEmails: Set<string>, sentDomains: Set<string>,
+): T[] {
+  const seenEmail = new Set<string>(), seenDomain = new Set<string>();
+  const out: T[] = [];
+  for (const r of rows) {
+    if (!r.email || !isSendableStatus(r.ev)) continue;
+    const email = r.email.toLowerCase();
+    const domain = (r.domain ?? '').toLowerCase();
+    if (sentEmails.has(email) || seenEmail.has(email)) continue;
+    if (domain && (sentDomains.has(domain) || seenDomain.has(domain))) continue;
+    seenEmail.add(email); if (domain) seenDomain.add(domain);
+    out.push(r);
+  }
+  return out;
+}
+
 export async function resolveAudience(
   db: Database, orgId: string, filter: AudienceFilter,
 ): Promise<{ leadIds: string[]; bucketByLeadId: Record<string, string | null> }> {
+  const [sent, sentDomains] = await Promise.all([alreadySentEmails(db, orgId), alreadySentDomains(db, orgId)]);
   if (filter.leadIds && filter.leadIds.length > 0) {
+    /* Even an explicit lead list only emails verified, not-yet-emailed, deduped addresses. */
+    const rows = await db.select({ id: schema.leads.id, email: schema.leads.email, ev: schema.leads.emailVerificationStatus, domain: schema.leads.domain })
+      .from(schema.leads).where(inArray(schema.leads.id, filter.leadIds));
     const buckets: Record<string, string | null> = {};
-    for (const id of filter.leadIds) buckets[id] = null;
-    return { leadIds: filter.leadIds, bucketByLeadId: buckets };
+    const idList: string[] = [];
+    for (const r of pickUncontacted(rows, sent, sentDomains)) { buckets[r.id] = null; idList.push(r.id); }
+    return { leadIds: idList, bucketByLeadId: buckets };
   }
   const conds = [eq(schema.leads.orgId, orgId), isNull(schema.leads.deletedAt), eq(schema.leads.disqualified, false)];
   if (filter.niche) conds.push(eq(schema.leads.niche, filter.niche));
@@ -67,11 +119,11 @@ export async function resolveAudience(
   if (filter.status === 'uncontacted') conds.push(inArray(schema.leads.status, ['new', 'uncontacted']));
   else if (filter.status === 'new') conds.push(eq(schema.leads.status, 'new'));
 
-  const rows = await db.select({ id: schema.leads.id, score: schema.leads.score, email: schema.leads.email })
+  const rows = await db.select({ id: schema.leads.id, score: schema.leads.score, email: schema.leads.email, ev: schema.leads.emailVerificationStatus, domain: schema.leads.domain })
     .from(schema.leads)
     .where(and(...conds));
 
-  const withEmail = rows.filter(r => r.email);
+  const withEmail = pickUncontacted(rows, sent, sentDomains);
 
   if (filter.stratified === 'reach' || filter.stratified === 'engagement') {
     const spec = filter.stratified === 'reach' ? REACH_SAMPLE : ENGAGEMENT_SAMPLE;
@@ -83,9 +135,15 @@ export async function resolveAudience(
     }
     return { leadIds: idList, bucketByLeadId: buckets };
   }
+  /* Honor a batch cap: keep the highest-score leads so "send to N" means N best,
+     not the whole pool. Without this the niche/status filter stages everything. */
+  let selected = withEmail;
+  if (filter.limit && filter.limit > 0 && selected.length > filter.limit) {
+    selected = [...selected].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, filter.limit);
+  }
   const buckets: Record<string, string | null> = {};
-  for (const r of withEmail) buckets[r.id] = bucketFor(r.score);
-  return { leadIds: withEmail.map(r => r.id), bucketByLeadId: buckets };
+  for (const r of selected) buckets[r.id] = bucketFor(r.score);
+  return { leadIds: selected.map(r => r.id), bucketByLeadId: buckets };
 }
 
 export async function buildRecipients(db: Database, campaignId: string): Promise<number> {
@@ -98,8 +156,14 @@ export async function buildRecipients(db: Database, campaignId: string): Promise
   /* Exclude suppressed (email or domain). */
   const leads = await db.select({
     id: schema.leads.id, email: schema.leads.email, dedupDomain: schema.leads.dedupDomain,
-    status: schema.leads.status, score: schema.leads.score,
+    status: schema.leads.status, score: schema.leads.score, niche: schema.leads.niche,
   }).from(schema.leads).where(inArray(schema.leads.id, audience.leadIds));
+  const focusNiches = await getFocus(db, camp.orgId);
+  /* Leads where personalization found a concrete, addressable gap → signal-anchored
+     opener → higher reply rate, so they get a send-priority boost. */
+  const sigRows = await db.select({ leadId: schema.leadSignals.leadId, fact: schema.leadSignals.personalizationFact })
+    .from(schema.leadSignals).where(inArray(schema.leadSignals.leadId, audience.leadIds));
+  const signalLeads = new Set(sigRows.filter(r => r.fact && r.fact !== 'generic').map(r => r.leadId));
 
   const suppressedEmails = new Set<string>();
   const suppressedDomains = new Set<string>();
@@ -122,6 +186,7 @@ export async function buildRecipients(db: Database, campaignId: string): Promise
     orgId: camp.orgId,
     campaignId,
     leadId: l.id,
+    priority: recipientPriority(l.score, l.niche, focusNiches, signalLeads.has(l.id)),
     bucket: (audience.bucketByLeadId[l.id] ?? null) as string | null,
     state: 'pending' as const,
   }));
@@ -181,6 +246,9 @@ export async function renderPreview(db: Database, campaignId: string, leadId: st
   if (!lead) throw new Error('lead_not_found');
   const signals = (await db.select().from(schema.leadSignals).where(eq(schema.leadSignals.leadId, leadId)).limit(1))[0];
 
+  const cfg = getConfig();
+  /* Match what sender-pipeline actually sends: rotated persona + cached opener. */
+  const persona = pickSignoffName(leadId, cfg.org.signoffNames) ?? org.fromName ?? cfg.org.fromName;
   const tpl: Template = TEMPLATES[camp.templateKey] ?? defaultTemplateFor(lead.niche as 'Septic');
   const rendered = renderEmail(tpl, {
     leadId,
@@ -192,11 +260,15 @@ export async function renderPreview(db: Database, campaignId: string, leadId: st
       niche: lead.niche as 'Septic',
       hasOnlineBooking: signals?.hasOnlineBooking ?? false,
     },
-    fromName: org.fromName ?? getConfig().org.fromName,
+    fromName: persona,
     fromSignoff: org.name,
+    opener: signals?.personalizedOpener ?? undefined,
+    body: signals?.personalizedBody ?? undefined,
+    /* Use the campaign's own subjects (e.g. offer subjects) so the preview matches
+       what sender-pipeline actually sends, not the niche template default. */
+    subjectOverrides: [camp.subjectA, camp.subjectB].filter((s): s is string => !!s && s.trim().length > 0),
   });
 
-  const cfg = getConfig();
   const finalOut = finalRender({
     rendered,
     to: lead.email ?? '',
@@ -204,7 +276,7 @@ export async function renderPreview(db: Database, campaignId: string, leadId: st
     orgScopeKey: camp.orgId,
     campaignId: camp.id,
     identity: {
-      fromName: org.fromName ?? cfg.org.fromName,
+      fromName: persona,
       fromEmail: org.fromEmail ?? cfg.org.fromEmail,
       replyTo: org.replyTo ?? cfg.org.replyTo,
       unsubMailto: org.replyTo ?? cfg.org.replyTo,
@@ -244,9 +316,13 @@ export async function gateCampaign(db: Database, campaignId: string, ctx: Launch
   if (!camp) return { ok: false, blockers: [{ code: 'no_campaign', message: 'Campaign not found' }], warnings: [] };
   const org = (await db.select().from(schema.organizations).where(eq(schema.organizations.id, camp.orgId)).limit(1))[0];
   if (!org) return { ok: false, blockers: [{ code: 'no_org', message: 'Org not found' }], warnings: [] };
-  const domain = camp.senderDomainId
-    ? (await db.select().from(schema.senderDomains).where(eq(schema.senderDomains.id, camp.senderDomainId)).limit(1))[0] ?? null
-    : null;
+  /* Mirror the launch gate: when the campaign has no explicit sender domain,
+     fall back to the org's first registered domain so the same DNS/warmup
+     checks apply (otherwise auto-pause would block every quick campaign with
+     `no_sender_domain`). */
+  const domain = (camp.senderDomainId
+    ? (await db.select().from(schema.senderDomains).where(eq(schema.senderDomains.id, camp.senderDomainId)).limit(1))[0]
+    : (await db.select().from(schema.senderDomains).where(eq(schema.senderDomains.orgId, camp.orgId)).limit(1))[0]) ?? null;
 
   /* Last-24h stats from email_events. */
   const since = new Date(Date.now() - 24 * 3600 * 1000);
@@ -273,5 +349,6 @@ export async function gateCampaign(db: Database, campaignId: string, ctx: Launch
     bouncePausePct: ctx.bouncePausePct,
     complaintPausePct: ctx.complaintPausePct,
     unsubscribeReachable: domain?.unsubReachable ?? true,
+    requireSesProductionAccess: getConfig().ses.enabled,
   } as GateInput);
 }

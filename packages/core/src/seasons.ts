@@ -73,7 +73,29 @@ export const DEFAULT_SEASONS: Record<Niche, NicheSeasonConfig> = {
     monthlyMultipliers: [0.9, 0.95, 1.05, 1.1, 1.15, 1.1, 1.05, 1.0, 1.0, 0.95, 0.9, 0.85],
     stormBoostMultiplier: 1.0, stormEventTypes: [], stormBoostWindowDays: 30, isActive: true,
   },
+  'Pest Control': flatSeason('Pest Control'),
+  'Garage Door': flatSeason('Garage Door'),
+  Locksmith: flatSeason('Locksmith'),
+  'Appliance Repair': flatSeason('Appliance Repair'),
+  'Pool Service': { niche: 'Pool Service', monthlyMultipliers: [0.8, 0.85, 1.0, 1.15, 1.25, 1.3, 1.3, 1.2, 1.05, 0.9, 0.8, 0.8], stormBoostMultiplier: 1.0, stormEventTypes: [], stormBoostWindowDays: 30, isActive: true },
+  Landscaping: { niche: 'Landscaping', monthlyMultipliers: [0.8, 0.85, 1.1, 1.25, 1.3, 1.2, 1.1, 1.05, 1.05, 1.0, 0.85, 0.8], stormBoostMultiplier: 1.0, stormEventTypes: [], stormBoostWindowDays: 30, isActive: true },
+  Painter: flatSeason('Painter'),
+  'Carpet Cleaning': flatSeason('Carpet Cleaning'),
+  Handyman: flatSeason('Handyman'),
+  'Tree Service': { niche: 'Tree Service', monthlyMultipliers: [1.0, 1.0, 1.05, 1.05, 1.05, 1.0, 1.0, 1.0, 1.05, 1.05, 1.1, 1.1], stormBoostMultiplier: 1.30, stormEventTypes: ['Thunderstorm Wind', 'Tornado', 'Hurricane', 'Ice Storm'], stormBoostWindowDays: 30, isActive: true },
+  Fencing: flatSeason('Fencing'),
+  Concrete: flatSeason('Concrete'),
+  Moving: { niche: 'Moving', monthlyMultipliers: [0.85, 0.85, 0.95, 1.05, 1.2, 1.3, 1.3, 1.2, 1.05, 0.95, 0.85, 0.85], stormBoostMultiplier: 1.0, stormEventTypes: [], stormBoostWindowDays: 30, isActive: true },
+  'Junk Removal': flatSeason('Junk Removal'),
+  'Window Cleaning': { niche: 'Window Cleaning', monthlyMultipliers: [0.85, 0.9, 1.05, 1.2, 1.2, 1.15, 1.1, 1.05, 1.05, 1.0, 0.9, 0.85], stormBoostMultiplier: 1.0, stormEventTypes: [], stormBoostWindowDays: 30, isActive: true },
+  'Pressure Washing': { niche: 'Pressure Washing', monthlyMultipliers: [0.8, 0.85, 1.05, 1.2, 1.25, 1.2, 1.15, 1.1, 1.05, 0.95, 0.85, 0.8], stormBoostMultiplier: 1.0, stormEventTypes: [], stormBoostWindowDays: 30, isActive: true },
+  Solar: flatSeason('Solar'),
+  Flooring: flatSeason('Flooring'),
 };
+
+function flatSeason(niche: Niche): NicheSeasonConfig {
+  return { niche, monthlyMultipliers: Array(12).fill(1), stormBoostMultiplier: 1.0, stormEventTypes: [], stormBoostWindowDays: 30, isActive: true };
+}
 
 export interface SeasonalContext {
   niche: Niche;

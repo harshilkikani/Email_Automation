@@ -8,8 +8,8 @@
  * specific email so a leaked token can't be used to suppress someone else.
  *
  * Tokens are accepted by:
- *   - GET  /unsubscribe/:token  (landing page)
- *   - POST /unsubscribe         (RFC 8058 one-click handler — body has token)
+ *   - GET  /api/unsubscribe/:token  (human-click landing page)
+ *   - POST /api/unsubscribe/:token  (RFC 8058 one-click — same URL as the header)
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
@@ -66,5 +66,5 @@ export function verifyUnsubscribeToken(token: string, secret: string): Unsubscri
 }
 
 export function unsubscribeUrl(baseUrl: string, token: string): string {
-  return `${baseUrl.replace(/\/$/, '')}/unsubscribe/${encodeURIComponent(token)}`;
+  return `${baseUrl.replace(/\/$/, '')}/api/unsubscribe/${encodeURIComponent(token)}`;
 }

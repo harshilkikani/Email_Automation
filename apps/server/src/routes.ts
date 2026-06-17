@@ -14,6 +14,10 @@ import {
 import { classifyPhone } from '@keres/providers';
 import { getConfig } from './config.js';
 import { runDiscovery } from './services/discovery.js';
+import { quickScrape, quickFromLicenses, quickStatus, quickSweep, quickGet, quickPoolStage, stageValidationOffer, US_METROS } from './services/quick.js';
+import { enrichOwnersViaHunter } from './services/owner-enrich.js';
+import { tickReverify } from './services/reverify.js';
+import { getFocus, setFocus } from './services/focus.js';
 import {
   createCampaign, buildRecipients, renderPreview,
 } from './services/campaigns.js';
@@ -38,6 +42,7 @@ import {
   applyScoringProposal, rejectScoringProposal,
 } from './services/closed-loop.js';
 import { refreshWebsiteIntelForLead } from './services/website-intel.js';
+import { personalizeLead } from './services/personalization.js';
 import { emitEvent } from './services/events.js';
 
 /* Get the single-tenant org id from env / db — cached for 60s to avoid per-request DB lookup. */
@@ -315,6 +320,208 @@ export function registerRoutes(app: FastifyInstance) {
     return { ok: true, ...out };
   });
 
+  /* ────────────── Quick: Scrape & Send ────────────── */
+  app.post('/api/quick/scrape', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niche?: string; city?: string; state?: string; count?: number; followups?: number; stepDelayDays?: number };
+    if (!b.niche || !b.city || !b.state) return { ok: false, error: 'missing_fields' };
+    let r;
+    try {
+      r = await quickScrape(getDb(), {
+        orgId, niche: b.niche as 'Septic', city: b.city, state: b.state, count: b.count ?? 25,
+        followups: b.followups, stepDelayDays: b.stepDelayDays,
+      });
+    } catch (e: any) {
+      /* Discovery source (OSM/Overpass) can time out or be empty — surface a
+         clean message instead of a 500 so the UI can suggest another search. */
+      return { ok: false, error: 'discovery_failed', detail: e?.message ?? String(e) };
+    }
+    await writeAudit('quick_scrape', r.campaignId, { niche: b.niche, city: b.city, state: b.state, found: r.found, withEmail: r.withEmail }, req);
+    return { ok: true, ...r };
+  });
+
+  /* Validation campaign: A/B-test an alternate offer (claim supplement / liens)
+     against the core pitch, over a niche's existing pool. */
+  app.post('/api/quick/validate', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { offer?: string; niche?: string; count?: number; followups?: number };
+    if (b.offer !== 'claim_supplement' && b.offer !== 'liens' && b.offer !== 'reviews') return { ok: false, error: 'bad_offer' };
+    if (!b.niche) return { ok: false, error: 'missing_niche' };
+    const r = await stageValidationOffer(getDb(), {
+      orgId, offer: b.offer, niche: b.niche as 'Roofer', count: b.count, followups: b.followups,
+    });
+    await writeAudit('quick_validate', r.campaignId, { offer: b.offer, niche: b.niche, staged: r.recipientCount }, req);
+    return { ok: true, ...r };
+  });
+
+  /* Primary flow: "Get N leads anywhere" — niche only, no city/state. */
+  app.post('/api/quick/get', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niche?: string; count?: number; followups?: number; stepDelayDays?: number };
+    if (!b.niche) return { ok: false, error: 'missing_niche' };
+    let r;
+    try {
+      r = await quickGet(getDb(), {
+        orgId, niche: b.niche as 'Septic', count: b.count, followups: b.followups, stepDelayDays: b.stepDelayDays,
+      });
+    } catch (e: any) {
+      return { ok: false, error: 'discovery_failed', detail: e?.message ?? String(e) };
+    }
+    await writeAudit('quick_get', r.campaignId, { niche: b.niche, found: r.found, inserted: r.inserted, pool: r.recipientCount }, req);
+    return { ok: true, ...r };
+  });
+
+  /* Scrape & Send from imported state-license lists (free niche data). */
+  app.post('/api/quick/from-licenses', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niche?: string; state?: string; count?: number; followups?: number; stepDelayDays?: number };
+    if (!b.niche || !b.state) return { ok: false, error: 'missing_fields' };
+    const r = await quickFromLicenses(getDb(), {
+      orgId, niche: b.niche as 'Septic', city: '', state: b.state, count: b.count ?? 25,
+      followups: b.followups, stepDelayDays: b.stepDelayDays,
+    });
+    await writeAudit('quick_from_licenses', r.campaignId, { niche: b.niche, state: b.state, inserted: r.inserted, needsFinder: r.needsFinder }, req);
+    return { ok: true, ...r };
+  });
+
+  /* Send = launch the staged campaign through the full launch gate. */
+  app.post('/api/quick/send', async (req) => {
+    const db = getDb();
+    const b = (req.body ?? {}) as { campaignId?: string; override?: { reason: string } };
+    if (!b.campaignId) return { ok: false, error: 'missing_campaignId' };
+    const camp = (await db.select().from(schema.campaigns).where(eq(schema.campaigns.id, b.campaignId)).limit(1))[0];
+    if (!camp) return { ok: false, error: 'not_found' };
+    if (camp.recipientCount === 0) await buildRecipients(db, b.campaignId);
+    const gate = await evaluateLaunchGate(db, {
+      campaignId: b.campaignId, bouncePausePct: cfg.bouncePausePct,
+      complaintPausePct: cfg.complaintPausePct, seedlistTtlHours: 24 * 7,
+    });
+    if (!gate.ok && !b.override?.reason) return { ok: false, gate };
+    await db.update(schema.campaigns).set({ status: 'running', launchedAt: new Date() })
+      .where(eq(schema.campaigns.id, b.campaignId));
+    await writeAudit('quick_send', b.campaignId, { recipients: camp.recipientCount, overridden: !!b.override?.reason }, req);
+    return { ok: true, recipientCount: camp.recipientCount };
+  });
+
+  app.get('/api/quick/status', async (req) => {
+    const id = (req.query as { campaignId?: string }).campaignId;
+    if (!id) return { ok: false, error: 'missing_campaignId' };
+    return { ok: true, ...(await quickStatus(getDb(), id)) };
+  });
+
+  /* Mass mode: niche-only auto-sweep of US metros into one growing lead pool.
+     Each call handles a small batch; the client loops through US_METROS,
+     showing live progress as the pool fills. No city/state typing. */
+  app.post('/api/quick/sweep', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niche?: string; cursor?: number; batch?: number; perMetro?: number };
+    if (!b.niche) return { ok: false, error: 'missing_niche' };
+    try {
+      const r = await quickSweep(getDb(), {
+        orgId, niche: b.niche as 'Septic',
+        cursor: b.cursor, batch: b.batch, perMetro: b.perMetro,
+      });
+      return { ok: true, ...r };
+    } catch (e: any) {
+      return { ok: false, error: 'sweep_failed', detail: e?.message ?? String(e) };
+    }
+  });
+
+  app.get('/api/quick/sweep/metros', async () => ({ ok: true, total: US_METROS.length, metros: US_METROS }));
+
+  /* DMARC authentication summary (parsed from the rua= reports in the mailbox). */
+  app.get('/api/dmarc/summary', async () => {
+    const { dmarcSummary } = await import('./services/dmarc-processor.js');
+    const recent = await getDb().select().from(schema.dmarcReports)
+      .orderBy(desc(schema.dmarcReports.createdAt)).limit(10);
+    return { ok: true, summary: await dmarcSummary(getDb()), recent };
+  });
+
+  /* Re-run personalization for the whole pool — regenerates every lead's opener
+     + body with the current templates. Use after a template/logic change so
+     existing leads pick up the new varied copy (sends read the stored body). */
+  app.post('/api/admin/repersonalize', async (req) => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { limit?: number };
+    const ids = await db.select({ id: schema.leadSignals.leadId })
+      .from(schema.leadSignals)
+      .innerJoin(schema.leads, eq(schema.leads.id, schema.leadSignals.leadId))
+      .where(and(eq(schema.leads.orgId, orgId), isNull(schema.leads.deletedAt)))
+      .limit(Math.min(b.limit ?? 5000, 5000));
+    let regenerated = 0, skipped = 0;
+    for (const { id } of ids) {
+      try { (await personalizeLead(db, id)) ? regenerated++ : skipped++; }
+      catch { skipped++; }
+    }
+    await writeAudit('repersonalize', orgId, { regenerated, skipped, total: ids.length }, req);
+    return { ok: true, regenerated, skipped, total: ids.length };
+  });
+
+  /* Focus mode: which trades to send to FIRST. Empty = best-score-first across
+     all trades. Pure prioritization — no lead is ever excluded from the pool. */
+  app.get('/api/focus', async () => {
+    const orgId = await singleOrgId();
+    return { ok: true, niches: await getFocus(getDb(), orgId) };
+  });
+  app.post('/api/focus', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niches?: string[] };
+    const niches = Array.isArray(b.niches) ? b.niches.filter(n => typeof n === 'string') : [];
+    const r = await setFocus(getDb(), orgId, niches);
+    await writeAudit('set_focus', orgId, r as Record<string, unknown>, req);
+    return { ok: true, ...r };
+  });
+
+  /* Re-verify a batch of the existing pool now (catch dead/catch-all mailboxes
+     that predate catch-all detection) to drive the bounce rate down. The
+     scheduler also runs this every 3 min in the background. */
+  app.post('/api/admin/reverify', async (req) => {
+    const b = (req.body ?? {}) as { batches?: number };
+    const passes = Math.min(Math.max(1, b.batches ?? 1), 10);
+    const totals = { rechecked: 0, newlyBad: 0, stillSendable: 0 };
+    for (let i = 0; i < passes; i++) {
+      const r = await tickReverify(getDb(), app.log);
+      totals.rechecked += r.rechecked ?? 0;
+      totals.newlyBad += r.newlyBad ?? 0;
+      totals.stillSendable += r.stillSendable ?? 0;
+      if ((r.rechecked ?? 0) === 0) break;
+    }
+    await writeAudit('reverify', null, totals as Record<string, unknown>, req);
+    return { ok: true, ...totals };
+  });
+
+  /* Owner enrichment via Hunter domain-search (top-value un-named leads). Paid +
+     operator-triggered so credit spend is deliberate. No-op unless ENABLE_HUNTER. */
+  app.post('/api/admin/enrich-owners', async (req) => {
+    const b = (req.body ?? {}) as { limit?: number };
+    const r = await enrichOwnersViaHunter(getDb(), app.log, Math.min(b.limit ?? 25, 200));
+    await writeAudit('enrich_owners', null, r as Record<string, unknown>, req);
+    return { ok: true, ...r };
+  });
+
+  /* Mass send: stage a campaign over the ENTIRE verified pool for a niche and
+     launch it through the full gate. The scheduler drips it within caps/warmup. */
+  app.post('/api/quick/send-all', async (req) => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niche?: string; followups?: number; stepDelayDays?: number; override?: { reason: string } };
+    if (!b.niche) return { ok: false, error: 'missing_niche' };
+    const staged = await quickPoolStage(db, {
+      orgId, niche: b.niche as 'Septic', followups: b.followups, stepDelayDays: b.stepDelayDays,
+    });
+    if (staged.recipientCount === 0) return { ok: false, error: 'empty_pool', ...staged };
+    const gate = await evaluateLaunchGate(db, {
+      campaignId: staged.campaignId, bouncePausePct: cfg.bouncePausePct,
+      complaintPausePct: cfg.complaintPausePct, seedlistTtlHours: 24 * 7,
+    });
+    if (!gate.ok && !b.override?.reason) return { ok: false, gate, ...staged };
+    await db.update(schema.campaigns).set({ status: 'running', launchedAt: new Date() })
+      .where(eq(schema.campaigns.id, staged.campaignId));
+    await writeAudit('quick_send_all', staged.campaignId, { niche: b.niche, recipients: staged.recipientCount, overridden: !!b.override?.reason }, req);
+    return { ok: true, ...staged };
+  });
+
   /* ────────────── Leads ────────────── */
   app.get('/api/leads', async (req) => {
     const db = getDb();
@@ -348,6 +555,19 @@ export function registerRoutes(app: FastifyInstance) {
     const r = await refreshWebsiteIntelForLead(getDb(), id);
     await writeAudit('website_intel_refresh', id, { ok: r.ok, reason: r.reason ?? null }, req);
     return r;
+  });
+
+  /* Regenerate the fact-grounded personalized opener for one lead (operator
+     review/redo). Clears the cache first so personalizeLead recomputes. */
+  app.post('/api/leads/:id/regenerate-opener', async (req) => {
+    const db = getDb();
+    const { id } = req.params as { id: string };
+    await db.update(schema.leadSignals)
+      .set({ personalizedOpener: null, personalizationFact: null, personalizationModel: null, personalizationAt: null })
+      .where(eq(schema.leadSignals.leadId, id));
+    const opener = await personalizeLead(db, id);
+    await writeAudit('regenerate_opener', id, { generated: !!opener }, req);
+    return { ok: true, opener };
   });
 
   app.patch('/api/leads/:id', async (req) => {
@@ -690,9 +910,16 @@ ${r.ok
 </body></html>`);
   });
 
+  /* RFC 8058 one-click: mailbox providers POST to the exact List-Unsubscribe URL
+     (which is /api/unsubscribe/:token), body `List-Unsubscribe=One-Click`. */
+  app.post('/api/unsubscribe/:token', async (req, reply) => {
+    const { token } = req.params as { token: string };
+    const r = await processUnsubscribe(getDb(), token);
+    return reply.code(r.ok ? 200 : 400).send(r);
+  });
+
+  /* Legacy one-click POST with token in query/body (kept for back-compat). */
   app.post('/api/unsubscribe', async (req, reply) => {
-    /* RFC 8058 one-click POST. Body is application/x-www-form-urlencoded with
-       `List-Unsubscribe=One-Click` plus our token in the query string. */
     const params = req.query as Record<string, string | undefined>;
     let token = params.token;
     if (!token) {
@@ -969,6 +1196,135 @@ ${r.ok
     const rows = await db.select().from(schema.inboundMessages)
       .where(eq(schema.inboundMessages.orgId, orgId))
       .orderBy(desc(schema.inboundMessages.receivedAt))
+      .limit(200);
+    return { ok: true, rows };
+  });
+
+  /* Daily send-limit status — so the UI can show "limit reached" + remaining. */
+  app.get('/api/send-status', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const d = (await db.select().from(schema.senderDomains)
+      .where(eq(schema.senderDomains.orgId, orgId)).limit(1))[0];
+    /* Pending breakdown: how many are due to send now vs. deferred to a recipient's
+       local morning (the local-timezone timing), plus when the next batch fires. */
+    const pend = (await db.select({
+      n: sql<number>`count(*)::int`,
+      dueNow: sql<number>`count(*) filter (where ${schema.campaignRecipients.nextSendAt} is null or ${schema.campaignRecipients.nextSendAt} <= now())::int`,
+      deferred: sql<number>`count(*) filter (where ${schema.campaignRecipients.nextSendAt} > now())::int`,
+      nextAt: sql<string | null>`to_char(min(${schema.campaignRecipients.nextSendAt}) filter (where ${schema.campaignRecipients.nextSendAt} > now()) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`,
+    })
+      .from(schema.campaignRecipients)
+      .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignRecipients.campaignId))
+      .where(and(eq(schema.campaigns.status, 'running'), eq(schema.campaignRecipients.state, 'pending'))))[0];
+    /* Count actual sends today from the recipients (ground truth). The
+       senderDomains.sendsToday counter is only meaningful in the mailbox-rotation
+       path; the Spacemail single-sender setup has no mailbox rows, so it stays 0.
+       lastSentAt is stamped on every send (touch 1 + follow-ups) — one per
+       recipient per day — so this is the true "emails out the door today". UTC
+       midnight matches the daily rollover boundary. */
+    const dayStartUtc = new Date(); dayStartUtc.setUTCHours(0, 0, 0, 0);
+    const sentRow = (await db.select({ n: sql<number>`count(*)::int` })
+      .from(schema.campaignRecipients)
+      .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignRecipients.campaignId))
+      .where(and(
+        eq(schema.campaigns.orgId, orgId),
+        gte(schema.campaignRecipients.lastSentAt, dayStartUtc),
+      )))[0];
+    const sentToday = Number(sentRow?.n ?? 0);
+    const dailyCap = d?.dailySendBudget ?? 0;
+    return {
+      ok: true,
+      sentToday, dailyCap,
+      remaining: Math.max(0, dailyCap - sentToday),
+      capReached: dailyCap > 0 && sentToday >= dailyCap,
+      warmupDay: d?.warmupDay ?? 0,
+      warmupState: d?.warmupState ?? null,
+      pending: Number(pend?.n ?? 0),
+      dueNow: Number(pend?.dueNow ?? 0),
+      deferred: Number(pend?.deferred ?? 0),
+      scheduledNext: pend?.nextAt ?? null,   // ISO UTC: when the next deferred batch sends
+    };
+  });
+
+  /* Lead-pool volume — total / sendable / contacted + growth + per-niche, for
+     an at-a-glance dashboard of how the pool is filling. */
+  app.get('/api/leads/stats', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const rowsOf = (r: unknown) => ((r as { rows?: Array<Record<string, unknown>> }).rows ?? (r as Array<Record<string, unknown>>));
+    const s = rowsOf(await db.execute(sql`
+      SELECT
+        count(*)::int AS total,
+        count(*) FILTER (WHERE email IS NOT NULL)::int AS with_email,
+        count(*) FILTER (WHERE email IS NOT NULL AND disqualified = false
+          AND status NOT IN ('contacted','bounced','unsubscribed','dnc')
+          AND (email_verification_status IS NULL OR email_verification_status NOT IN ('invalid','disposable')))::int AS sendable,
+        count(*) FILTER (WHERE status = 'contacted')::int AS contacted,
+        count(*) FILTER (WHERE discovered_at > date_trunc('day', now()))::int AS today,
+        count(*) FILTER (WHERE discovered_at > now() - interval '7 days')::int AS week
+      FROM leads WHERE org_id = ${orgId} AND deleted_at IS NULL`))[0];
+    const byNiche = rowsOf(await db.execute(sql`
+      SELECT niche AS k, count(*)::int AS n FROM leads
+      WHERE org_id = ${orgId} AND deleted_at IS NULL AND disqualified = false
+      GROUP BY 1 ORDER BY n DESC`));
+    return { ok: true, ...s, byNiche };
+  });
+
+  /* Message performance: reply/bounce rates per copy lever (CTA, gap pitched, AI
+     angle, niche) so the operator can see which messages earn replies. Needs
+     volume to be meaningful — tiny samples are surfaced as such by the UI. */
+  app.get('/api/performance', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const rowsOf = (r: unknown) => ((r as { rows?: Array<Record<string, unknown>> }).rows ?? (r as Array<Record<string, unknown>>));
+    const dim = async (expr: ReturnType<typeof sql>) => rowsOf(await db.execute(sql`
+      SELECT ${expr} AS k,
+        count(*)::int AS sent,
+        count(*) FILTER (WHERE cr.state = 'replied')::int AS replied,
+        count(*) FILTER (WHERE cr.state = 'bounced')::int AS bounced
+      FROM campaign_recipients cr
+      JOIN lead_signals s ON s.lead_id = cr.lead_id
+      JOIN leads l ON l.id = cr.lead_id
+      WHERE cr.org_id = ${orgId} AND cr.first_sent_at IS NOT NULL
+      GROUP BY 1 ORDER BY replied DESC, sent DESC`));
+    const overall = rowsOf(await db.execute(sql`
+      SELECT count(*)::int AS sent,
+        count(*) FILTER (WHERE state = 'replied')::int AS replied,
+        count(*) FILTER (WHERE state = 'bounced')::int AS bounced
+      FROM campaign_recipients WHERE org_id = ${orgId} AND first_sent_at IS NOT NULL`))[0];
+    return {
+      ok: true,
+      overall,
+      byOffer: await dim(sql`coalesce(s.personalization_variant->>'offer', 'ai_solutions')`),
+      byCta: await dim(sql`s.personalization_variant->>'cta'`),
+      byGap: await dim(sql`s.personalization_variant->>'gap'`),
+      byAiAngle: await dim(sql`s.personalization_variant->>'ai'`),
+      byNiche: await dim(sql`l.niche`),
+    };
+  });
+
+  /* Sent mail: the emails WE sent (SMTP relay doesn't surface these anywhere
+     else in the app). Reads the rendered copy stored per recipient. */
+  app.get('/api/sent', async () => {
+    const db = getDb();
+    const orgId = await singleOrgId();
+    const rows = await db.select({
+      id: schema.campaignRecipients.id,
+      state: schema.campaignRecipients.state,
+      subject: schema.campaignRecipients.renderedSubject,
+      body: schema.campaignRecipients.renderedBody,
+      sentAt: schema.campaignRecipients.lastSentAt,
+      step: schema.campaignRecipients.step,
+      toName: schema.leads.name,
+      toEmail: schema.leads.email,
+      campaign: schema.campaigns.name,
+    })
+      .from(schema.campaignRecipients)
+      .innerJoin(schema.leads, eq(schema.leads.id, schema.campaignRecipients.leadId))
+      .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignRecipients.campaignId))
+      .where(and(eq(schema.campaignRecipients.orgId, orgId), sql`${schema.campaignRecipients.lastSentAt} IS NOT NULL`))
+      .orderBy(desc(schema.campaignRecipients.lastSentAt))
       .limit(200);
     return { ok: true, rows };
   });

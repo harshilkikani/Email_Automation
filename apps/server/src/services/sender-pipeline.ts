@@ -6,19 +6,22 @@
  * It is intentionally a simple polling loop (not a separate worker process)
  * so the v3.1 single-Fly-machine architecture works without Upstash/BullMQ.
  */
-import { and, eq, sql, asc, inArray, lte, or, isNull } from 'drizzle-orm';
+import { and, eq, sql, asc, desc, inArray, lte, or, isNull } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
-import { defaultTemplateFor, renderEmail, TEMPLATES, type Template, type CampaignDecision } from '@keres/core';
+import { defaultTemplateFor, renderEmail, pickSignoffName, TEMPLATES, type Template, type CampaignDecision } from '@keres/core';
 import { finalRender, lintEmail, highestSeverity } from '@keres/email';
 import { randomUUID } from 'node:crypto';
 import { getConfig } from '../config.js';
 import { gateCampaign } from './campaigns.js';
 import { getOutbound } from './sender-factory.js';
 import { pickMailbox, recordSendOutcome, type PickedMailbox } from './sender-rotation.js';
+import { localSendDeferral } from './local-time.js';
+import { isSendableStatus } from './verify.js';
 import { checkSaturationBeforeSend } from './saturation.js';
 import { emitEvent } from './events.js';
 import { getPreferredHoursBulk, deferralTarget } from './send-time-histogram.js';
+import { saveToSentFolder } from './imap-client.js';
 
 /**
  * `CampaignDecision` is now exported from `@keres/core` (see
@@ -40,6 +43,9 @@ function computeDecision(
   if (camp.status !== 'running') return { shouldSend: false, skipReason: 'campaign_not_running', mailbox: null, template: defaultTemplateFor(lead.niche as 'Septic'), subjectOverrides: [], senderIdentity: { fromName: '', fromEmail: '', replyTo: '' } };
   if (!lead.email) return { shouldSend: false, skipReason: 'no_email', mailbox: null, template: defaultTemplateFor(lead.niche as 'Septic'), subjectOverrides: [], senderIdentity: { fromName: '', fromEmail: '', replyTo: '' } };
   if (['bounced', 'unsubscribed', 'dnc'].includes(lead.status)) return { shouldSend: false, skipReason: 'lead_status', mailbox: null, template: defaultTemplateFor(lead.niche as 'Septic'), subjectOverrides: [], senderIdentity: { fromName: '', fromEmail: '', replyTo: '' } };
+  /* Send-time verification guard: a recipient queued before re-verification may
+     now be known-bad (invalid/disposable/catch_all). Skip it so it never bounces. */
+  if (!isSendableStatus(lead.emailVerificationStatus)) return { shouldSend: false, skipReason: 'unverified_email', mailbox: null, template: defaultTemplateFor(lead.niche as 'Septic'), subjectOverrides: [], senderIdentity: { fromName: '', fromEmail: '', replyTo: '' } };
   if (sat.action === 'block') return { shouldSend: false, skipReason: `saturation_${sat.reason}`, mailbox: null, template: defaultTemplateFor(lead.niche as 'Septic'), subjectOverrides: [], senderIdentity: { fromName: '', fromEmail: '', replyTo: '' } };
 
   const senderIdentity = mailbox
@@ -83,6 +89,7 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
     orgId: schema.campaignRecipients.orgId,
     retryCount: schema.campaignRecipients.retryCount,
     nextSendAt: schema.campaignRecipients.nextSendAt,
+    step: schema.campaignRecipients.step,
   })
     .from(schema.campaignRecipients)
     .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignRecipients.campaignId))
@@ -109,7 +116,9 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
       eq(schema.campaigns.status, 'running'),
       opts.campaignId ? eq(schema.campaignRecipients.campaignId, opts.campaignId) : sql`true`,
     ))
-    .orderBy(asc(schema.campaignRecipients.id))
+    /* Focus mode: best-fit / focus-trade leads first (priority DESC), then FIFO.
+       Pure ordering — every recipient still sends, just in a smarter order. */
+    .orderBy(desc(schema.campaignRecipients.priority), asc(schema.campaignRecipients.id))
     .limit(opts.maxToSend);
 
   /* Pre-fetch all campaigns, leads, orgs, and signals to eliminate N+1 queries. */
@@ -162,6 +171,21 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
     if (!camp || !org) { skipped++; continue; }
     if (!lead) { skipped++; await markSkipped(db, r.rid, 'no_lead'); continue; }
 
+    /* Recipient-local timing: push the send to the next local business-hours
+       slot (~10am local, weekdays) based on the lead's state. Lands the email
+       when it's actually morning for them rather than whenever UTC the batch
+       fires. Skips this tick; nextSendAt gates the re-pick. */
+    if (cfg.localSendTiming.enabled) {
+      const localDefer = localSendDeferral(wallNow, lead.state, lead.id);
+      if (localDefer && localDefer.getTime() > wallNow.getTime()) {
+        await db.update(schema.campaignRecipients)
+          .set({ nextSendAt: localDefer })
+          .where(eq(schema.campaignRecipients.id, r.rid));
+        skipped++;
+        continue;
+      }
+    }
+
     /* Layer 7: defer to high-reply-rate hour if this niche has a learned
        preference and we're earlier in the day. Updates `nextSendAt` and
        skips this tick — the deferred recipient will be picked up by a
@@ -199,6 +223,11 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
     const { senderIdentity, template: tpl, subjectOverrides } = decision;
     const signals = signalMap.get(lead.id);
 
+    /* Sender persona: a name rotated stably per lead for the From display + the
+       signoff, so each business consistently sees one "rep". Falls back to the
+       org from-name when no personas are configured. */
+    const persona = pickSignoffName(lead.id, cfg.org.signoffNames) ?? senderIdentity.fromName;
+
     const rendered = renderEmail(tpl, {
       leadId: lead.id,
       business: lead.name,
@@ -209,9 +238,12 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
         niche: lead.niche as 'Septic',
         hasOnlineBooking: signals?.hasOnlineBooking ?? false,
       },
-      fromName: senderIdentity.fromName,
+      fromName: persona,
       fromSignoff: org.name,
       subjectOverrides,
+      opener: signals?.personalizedOpener ?? undefined,
+      body: signals?.personalizedBody ?? undefined,
+      step: r.step,
     });
     const msgId = `<${randomUUID()}@${cfg.org.outreachSubdomain}>`;
     const final = finalRender({
@@ -221,7 +253,7 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
       orgScopeKey: org.id,
       campaignId: camp.id,
       identity: {
-        fromName: senderIdentity.fromName,
+        fromName: persona,
         fromEmail: senderIdentity.fromEmail,
         replyTo: senderIdentity.replyTo,
         unsubMailto: senderIdentity.replyTo,
@@ -264,12 +296,30 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
         occurredAt: new Date(),
         rawPayload: { msgId, slot: rendered.slotKey } as Record<string, unknown>,
       }).onConflictDoNothing();
+      /* File a copy in the mailbox "Sent" folder (SMTP relay alone doesn't —
+         that's a mail-client behavior). Best-effort: never fail a send over it. */
+      if (cfg.imap.saveToSent && cfg.imap.user && cfg.imap.pass) {
+        await saveToSentFolder(cfg.imap, final.rawMessage).catch(() => undefined);
+      }
+      /* Sequence: if more touches remain, re-queue the next one after the delay;
+         otherwise this recipient is done. A reply/bounce/unsubscribe flips the
+         recipient to a terminal state elsewhere, which stops the sequence. */
+      const totalSteps = Math.max(1, camp.sequenceSteps ?? 1);
+      const now = new Date();
+      const hasMore = r.step < totalSteps;
+      const nextAt = hasMore
+        ? new Date(now.getTime() + Math.max(1, camp.stepDelayDays ?? 3) * 86400_000)
+        : null;
       await db.update(schema.campaignRecipients).set({
-        state: 'sent', providerMessageId: out.providerMessageId,
+        state: hasMore ? 'pending' : 'sent',
+        step: hasMore ? r.step + 1 : r.step,
+        nextSendAt: nextAt,
+        providerMessageId: out.providerMessageId,
         renderedSubject: final.subject, renderedBody: final.bodyWithFooter,
         variantSeed: rendered.variantSeed, slotKey: rendered.slotKey,
         senderMailboxId: picked?.id ?? null,
-        firstSentAt: new Date(),
+        firstSentAt: r.step === 1 ? now : undefined,
+        lastSentAt: now,
       }).where(eq(schema.campaignRecipients.id, r.rid));
       await db.update(schema.campaigns).set({ sentCount: sql`${schema.campaigns.sentCount} + 1` })
         .where(eq(schema.campaigns.id, camp.id));

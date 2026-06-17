@@ -21,6 +21,7 @@
 import type { LiftRow } from './validation.js';
 import type { ScoringWeights } from './scoring.js';
 import type { Niche } from './types.js';
+import type { PersonalizeOpenerInput } from './personalization.js';
 
 export type AiOperation =
   | 'generate_template' | 'analyze_replies' | 'suggest_weights' | 'summarize_intel';
@@ -79,6 +80,23 @@ export interface AiAdapter {
     /** One row per lead — intel facts only, no PII. */
     leads: Array<{ niche: Niche; techStack: string[]; bookingVendor: string | null; services: string[] }>;
   }): Promise<AiIntelSummary>;
+
+  /**
+   * Rephrase pre-derived, verified deficiencies into a 1–2 sentence cold-email
+   * opener. Grounded ONLY in the supplied facts — the adapter must not invent
+   * weaknesses. Returns `null` to signal "use the deterministic fallback".
+   *
+   * NOTE: per the per-lead rule, callers run this in a BATCH enrichment tick and
+   * cache the result — never in the send hot path.
+   */
+  personalizeOpener(input: PersonalizeOpenerInput): Promise<string | null>;
+
+  /**
+   * Write the FULL email body (deep personalization) grounded only in the
+   * supplied facts. Greets by owner first name when given. Returns `null` to use
+   * the deterministic composer / template. Batch-only (cached), like the opener.
+   */
+  personalizeEmail(input: PersonalizeOpenerInput): Promise<string | null>;
 }
 
 /* ────────── Noop adapter ────────── */
@@ -198,6 +216,16 @@ export class NoopAiAdapter implements AiAdapter {
       global.push(`${pct(totalWithBooking, input.leads.length)} of leads already use an online booking vendor.`);
     }
     return { byNiche, global };
+  }
+
+  /** AI off → no opener; caller falls back to the deterministic slot opener. */
+  async personalizeOpener(_input: PersonalizeOpenerInput): Promise<string | null> {
+    return null;
+  }
+
+  /** AI off → no full body; caller falls back to composeEmail / the template. */
+  async personalizeEmail(_input: PersonalizeOpenerInput): Promise<string | null> {
+    return null;
   }
 }
 
@@ -392,6 +420,67 @@ Respond ONLY with JSON:
     }
   }
 
+  async personalizeOpener(input: PersonalizeOpenerInput): Promise<string | null> {
+    if (input.deficiencies.length === 0) return null;   // nothing verified to say
+    /* Feed ONLY the pre-derived, true facts. The model rephrases; it never adds. */
+    const facts = input.deficiencies.slice(0, 3).map((d, i) => `${i + 1}. ${d.fact}`).join('\n');
+    const prompt = `You write the first line of a cold email to a local ${input.niche} business.
+
+Business: ${input.business}
+City: ${input.city || '(unknown)'}
+${input.ownerFirst ? `Owner first name (greet them): ${input.ownerFirst}` : ''}
+What we sell: ${input.product}
+
+VERIFIED facts about this business (use ONLY these — never invent or assume anything else):
+${facts}
+
+Write a 1-2 sentence opener that:
+- names ONE specific gap from the verified facts above (pick the most compelling)
+- is warm and human, not salesy; sounds like a person who actually looked
+- is plain text: no greeting, no signoff, no emojis, no links, no quotes
+- is at most 45 words
+
+Respond with ONLY the opener text.`;
+
+    try {
+      const raw = await this.complete(prompt);
+      const cleaned = sanitizeOpener(raw, input.business);
+      return cleaned || null;
+    } catch {
+      return null;   // fail-closed → caller uses the deterministic opener
+    }
+  }
+
+  async personalizeEmail(input: PersonalizeOpenerInput): Promise<string | null> {
+    if (input.deficiencies.length === 0) return null;
+    const facts = input.deficiencies.slice(0, 3).map((d, i) => `${i + 1}. ${d.fact} → ${d.fix}`).join('\n');
+    const prompt = `Write the BODY of a short cold email to a local ${input.niche} business.
+
+Business: ${input.business}
+City: ${input.city || '(unknown)'}
+${input.ownerFirst ? `Owner first name (greet them by name): ${input.ownerFirst}` : ''}
+What we sell: ${input.product}
+
+VERIFIED facts (gap → how we fix it; use ONLY these, never invent):
+${facts}
+
+Write a warm, human email that:
+- greets the owner${input.ownerFirst ? ` (${input.ownerFirst})` : ''}
+- names ONE specific gap from the facts and how we fix it
+- ends with a soft 10-minute-look ask
+- is plain text, 60–90 words, no subject line, NO signature/sign-off (added later), no links, no emojis
+
+Respond with ONLY the email body text.`;
+
+    try {
+      const raw = await this.complete(prompt);
+      const cleaned = sanitizeEmailBody(raw, input.business);
+      return cleaned ? `${cleaned}\n\n{{from_name}}\n{{from_signoff}}` : null;
+    } catch {
+      return null;   // fail-closed → caller uses composeEmail / template
+    }
+  }
+
   private async complete(prompt: string): Promise<string> {
     const res = await fetch(`${this.baseUrl}/api/generate`, {
       method: 'POST',
@@ -416,4 +505,52 @@ function extractJsonObject(raw: string): Record<string, unknown> {
   const m = raw.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('no_json_object');
   return JSON.parse(m[0]) as Record<string, unknown>;
+}
+
+/**
+ * Sanitize an LLM-written email body: strip preamble/quotes/signoff, reject
+ * links/emojis, collapse blank lines, cap length, require the business mention.
+ * Returns '' if it doesn't look usable (caller falls back to the composer).
+ */
+export function sanitizeEmailBody(raw: string, business: string): string {
+  let s = (raw ?? '').trim();
+  if (!s) return '';
+  s = s.replace(/^(here(?:'s| is)[^:]*:|email body:|body:|sure[,!]?)\s*/i, '').trim();
+  s = s.replace(/^["'“”`]+|["'“”`]+$/g, '').trim();
+  if (/https?:\/\/|www\.|<[a-z/]/i.test(s)) return '';
+  s = s.replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '');
+  /* Drop any model-added signoff (we append our own persona signoff). */
+  s = s.replace(/\n+\s*(best|thanks|thank you|regards|cheers|sincerely|warmly)[,.!]?[\s\S]*$/i, '').trim();
+  s = s.replace(/\n{3,}/g, '\n\n').trim();
+  const words = s.split(/\s+/);
+  if (words.length < 25 || words.length > 140) return '';
+  if (business && business.length > 2 && !s.toLowerCase().includes(business.toLowerCase().split(/\s+/)[0]!)) return '';
+  return s;
+}
+
+/**
+ * Make an LLM opener safe to drop into a plaintext email: strip wrapping quotes,
+ * links, emojis, and any leaked preamble; collapse whitespace; cap to ~2
+ * sentences / 60 words. Returns '' if it doesn't look like a usable opener.
+ */
+export function sanitizeOpener(raw: string, business: string): string {
+  let s = (raw ?? '').trim();
+  if (!s) return '';
+  /* Drop a leading "Opener:"/"Here is..." preamble and surrounding quotes. */
+  s = s.replace(/^(here(?:'s| is)[^:]*:|opener:|sure[,!]?)\s*/i, '').trim();
+  s = s.replace(/^["'“”`]+|["'“”`]+$/g, '').trim();
+  /* Plaintext only: no URLs, no emojis, single spaces. */
+  if (/https?:\/\/|www\.|<[a-z/]/i.test(s)) return '';
+  s = s.replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '').replace(/\s+/g, ' ').trim();
+  /* Keep the first 2 sentences. */
+  const sentences = s.match(/[^.!?]+[.!?]+/g);
+  if (sentences && sentences.length > 2) s = sentences.slice(0, 2).join(' ').trim();
+  const words = s.split(/\s+/);
+  if (words.length < 4 || words.length > 60) return '';   // too short/long → reject
+  /* Sanity: a good opener mentions the business it's about. */
+  if (business && business.length > 2 && !s.toLowerCase().includes(business.toLowerCase().split(/\s+/)[0]!)) {
+    /* not fatal — but require it references the business name's first token */
+    return '';
+  }
+  return s;
 }

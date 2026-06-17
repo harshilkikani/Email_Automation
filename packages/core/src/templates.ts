@@ -21,7 +21,32 @@ export interface Template {
   openerVariants: Record<SlotKey, string[]>;
   painVariants: string[];
   bodyTemplate: string;
+  /** Follow-up bodies for touches 2,3,… When absent, DEFAULT_FOLLOWUPS is used. */
+  followups?: string[];
 }
+
+/** Short, niche-agnostic follow-up bumps (sent only if no reply). Personalized
+ *  with the business name + persona signoff; the CAN-SPAM footer is appended later. */
+/* Escalating, reply-based sequence (no links). Follow-ups drive ~42% of all
+   replies; the ask widens from soft → example → a quick time → a breakup. */
+export const DEFAULT_FOLLOWUPS: string[] = [
+  `Floating this back to the top in case it slipped by, {{business}}. Worth a quick look?
+
+{{from_name}}
+{{from_signoff}}`,
+  `No worries if timing's off — want me to send a 2-minute example of how it'd work for {{business}}?
+
+{{from_name}}
+{{from_signoff}}`,
+  `If email's a hassle, worth a quick 10 minutes this week? Reply with a time that works for {{business}} and I'll send over an invite.
+
+{{from_name}}
+{{from_signoff}}`,
+  `I'll stop here so I'm not cluttering your inbox. If catching more jobs ever becomes a priority for {{business}}, just reply "info" and I'll send the details. All the best.
+
+{{from_name}}
+{{from_signoff}}`,
+];
 
 const COMMON_OPENERS: Record<SlotKey, string[]> = {
   no_website: [
@@ -250,6 +275,13 @@ export function defaultTemplateFor(niche: Niche): Template {
     Roofer: 'roofer', Septic: 'septic', 'Water/Mold': 'water', HVAC: 'hvac',
     Plumber: 'plumber', Electrician: 'electrician', Towing: 'towing',
     'Real Estate': 'real-estate',
+    /* New trades use the niche-agnostic GENERAL template (missed-call angle
+       works for every inbound local-service business). */
+    'Pest Control': 'general', 'Garage Door': 'general', Locksmith: 'general',
+    'Appliance Repair': 'general', 'Pool Service': 'general', Landscaping: 'general',
+    Painter: 'general', 'Carpet Cleaning': 'general', Handyman: 'general', 'Tree Service': 'general',
+    Fencing: 'general', Concrete: 'general', Moving: 'general', 'Junk Removal': 'general',
+    'Window Cleaning': 'general', 'Pressure Washing': 'general', Solar: 'general', Flooring: 'general',
   };
   return TEMPLATES[niche2key[niche]] ?? GENERAL;
 }
@@ -267,6 +299,20 @@ export interface RenderContext {
   fromName: string;
   fromSignoff?: string;
   subjectOverrides?: string[];
+  /**
+   * Pre-generated, fact-grounded opener (from the personalization tick). When
+   * present and non-empty it replaces the deterministic slot opener. The
+   * slotKey is still recorded (from the signals) for analytics.
+   */
+  opener?: string;
+  /** Sequence touch number (1 = first email; 2+ selects a follow-up body). */
+  step?: number;
+  /**
+   * Pre-generated FULL email body (deep personalization). When present, it
+   * replaces the template body for the first touch; follow-ups still use bumps.
+   * May contain {{from_name}}/{{from_signoff}} tokens.
+   */
+  body?: string;
 }
 
 export interface RenderedEmail {
@@ -274,6 +320,17 @@ export interface RenderedEmail {
   body: string;
   slotKey: SlotKey;
   variantSeed: bigint;
+}
+
+/**
+ * Pick a sender persona name for a lead, stable per lead-id so a given business
+ * always sees the same "rep" (consistent if they reply). Returns null when no
+ * names are configured (caller falls back to the org's from-name).
+ */
+export function pickSignoffName(leadId: string, names: string[]): string | null {
+  const pool = names.filter(n => n && n.trim());
+  if (pool.length === 0) return null;
+  return pickByHash(pool, stableHash(`signoff:${leadId}`)).trim();
 }
 
 export function pickSlot(signals: RenderContext['signals'], variantOverride?: SlotKey): SlotKey {
@@ -295,7 +352,12 @@ export function stableHash(seed: string): bigint {
     h ^= BigInt(seed.charCodeAt(i));
     h = (h * 1099511628211n) & 0xffffffffffffffffn;
   }
-  return h;
+  /* Mask to 63 bits so the value always fits a SIGNED 64-bit Postgres `bigint`
+     (max 9.2e18). Unmasked FNV-1a is unsigned 64-bit (max 1.8e19), so ~half of
+     all values overflowed `campaign_recipients.variant_seed` — the INSERT threw
+     AFTER the email had already been sent, mis-marking delivered mail as
+     "failed" (which then retried → duplicate sends). */
+  return h & 0x7fffffffffffffffn;
 }
 
 function pickByHash<T>(arr: T[], seed: bigint): T {
@@ -307,12 +369,22 @@ function pickByHash<T>(arr: T[], seed: bigint): T {
 export function renderEmail(template: Template, ctx: RenderContext): RenderedEmail {
   const seed = stableHash(ctx.leadId);
   const slotKey = pickSlot(ctx.signals);
-  const openers = template.openerVariants[slotKey] ?? template.openerVariants.default;
-  const opener = pickByHash(openers, seed);
+  const step = ctx.step && ctx.step > 1 ? ctx.step : 1;
+  /* Prefer a pre-generated personalized opener; else pick the deterministic
+     slot opener by stable hash. */
+  const slotOpeners = template.openerVariants[slotKey] ?? template.openerVariants.default;
+  const opener = (ctx.opener && ctx.opener.trim()) ? ctx.opener.trim() : pickByHash(slotOpeners, seed);
   const variants = ctx.subjectOverrides && ctx.subjectOverrides.length > 0
     ? ctx.subjectOverrides
     : template.subjectVariants;
-  const subject = pickByHash(variants, seed + 1n);
+  /* Follow-ups reply in-thread → "Re: <subject>"; touch 1 uses the plain subject. */
+  const baseSubject = pickByHash(variants, seed + 1n);
+  const subject = step > 1 ? `Re: ${baseSubject}` : baseSubject;
+  /* Body: touch 1 = pre-generated full body (if any) else template; N>1 = bump. */
+  const followups = template.followups && template.followups.length > 0 ? template.followups : DEFAULT_FOLLOWUPS;
+  const bodySource = step > 1
+    ? followups[Math.min(step - 2, followups.length - 1)]!
+    : (ctx.body && ctx.body.trim() ? ctx.body : template.bodyTemplate);
   const pain = pickByHash(template.painVariants, seed + 2n);
 
   /* Two-pass: opener / pain first (may themselves contain {{business}} or {{city}}),
@@ -329,7 +401,7 @@ export function renderEmail(template: Template, ctx: RenderContext): RenderedEma
 
   return {
     subject: replace(subject),
-    body: replace(template.bodyTemplate).trim(),
+    body: replace(bodySource).trim(),
     slotKey,
     variantSeed: seed,
   };
