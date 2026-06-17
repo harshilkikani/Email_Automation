@@ -153,6 +153,9 @@ export async function runDiscovery(db: Database, input: RunDiscoveryInput): Prom
         if (y.rating !== null) reviewRating = y.rating;
       } catch { /* ignore */ }
     }
+    /* Foursquare rating fallback (0–5, normalized by the adapter). Used for scoring
+       + lead-prioritization; the email never asserts it as their Google rating. */
+    if (reviewRating === null && typeof cand.rating === 'number') reviewRating = cand.rating;
 
     const isStormZone = await isInStormZone(db, cand.postalCode);
 

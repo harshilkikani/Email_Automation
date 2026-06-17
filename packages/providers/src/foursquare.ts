@@ -25,6 +25,7 @@ export interface FoursquareConfig {
 interface FsqPlace {
   fsq_place_id?: string;
   fsq_id?: string;
+  rating?: number;
   name?: string;
   website?: string;
   tel?: string;
@@ -44,7 +45,7 @@ export class FoursquareAdapter implements DiscoveryProvider {
       query: nicheToQuery(q.niche),
       near: `${q.city}, ${q.state}`,
       limit: String(Math.min(Math.max(q.targetCount, 1), 50)),
-      fields: 'fsq_place_id,name,website,tel,location',
+      fields: 'fsq_place_id,name,website,tel,location,rating',
     });
     const fetcher = this.cfg.fetcher ?? this.realFetch.bind(this);
     let resp: FoursquareResponse;
@@ -69,6 +70,11 @@ export class FoursquareAdapter implements DiscoveryProvider {
         niche: q.niche,
         source: 'foursquare',
         sourceExternalId: p.fsq_place_id ?? p.fsq_id ?? null,
+        /* Foursquare rates 0–10; normalize to 0–5 stars (used as an internal
+           targeting signal only — NOT asserted as the business's Google rating). */
+        rating: typeof p.rating === 'number'
+          ? Math.round((p.rating > 5 ? p.rating / 2 : p.rating) * 10) / 10
+          : null,
       });
     }
     return {

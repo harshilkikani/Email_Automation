@@ -81,14 +81,16 @@ export function deriveDeficiencies(intel: IntelFacts, signals: SignalFacts, nowY
     });
   }
 
-  /* Low star rating — a strong, concrete, addressable signal: customers filter by
-     stars, so a low rating directly costs jobs, and review automation fixes it. */
+  /* Lower star rating → a targeting signal for the review-automation pitch. We do
+     NOT assert a specific star number here: discovery ratings (e.g. Foursquare) are
+     a different scale/user base than the owner's Google rating, so a hard number
+     could be wrong. The claim stays defensible — true for any under-reviewed shop. */
   const rating = signals.reviewRating;
   if (rating !== null && rating > 0 && rating < 4.0) {
     out.push({
       code: 'low_rating',
-      fact: `is sitting at ${rating.toFixed(1)} stars on Google`,
-      fix: "we'd set up automated review requests so your happy customers pull that rating up — most of the jobs you're losing are going to the higher-rated shop",
+      fact: "isn't getting the steady stream of fresh 5-star reviews that pushes a shop up the local rankings",
+      fix: "we'd automate review requests so every happy customer becomes a public 5-star review and you climb past higher-rated competitors",
     });
   }
 

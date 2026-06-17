@@ -72,6 +72,8 @@ export interface LeadCandidate {
   niche: Niche;
   source: string;
   sourceExternalId?: string | null;
+  /** Star rating normalized to 0–5 from the discovery source (targeting signal). */
+  rating?: number | null;
 }
 
 export interface ScoringInputs {
