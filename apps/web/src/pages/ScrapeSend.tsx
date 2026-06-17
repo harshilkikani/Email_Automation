@@ -8,6 +8,20 @@ const NICHES = ['Septic', 'Water/Mold', 'HVAC', 'Roofer', 'Plumber', 'Electricia
   'Fencing', 'Concrete', 'Moving', 'Junk Removal', 'Window Cleaning', 'Pressure Washing', 'Solar', 'Flooring'];
 const US_METRO_HINT = 336;  // size of the server's built-in metro sweep list (display hint)
 
+interface SendStatus {
+  sentToday: number; dailyCap: number; remaining: number; capReached: boolean;
+  pending: number; dueNow: number; deferred: number; scheduledNext: string | null;
+}
+
+/** Friendly "Wed 10:00 AM (in ~6h)" for the next scheduled send batch. */
+function formatWhen(iso: string | null): string {
+  if (!iso) return 'soon';
+  const d = new Date(iso); if (isNaN(d.getTime())) return 'soon';
+  const hrs = Math.max(0, Math.round((d.getTime() - Date.now()) / 3_600_000));
+  const when = d.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  return hrs <= 0 ? when : `${when} (in ~${hrs}h)`;
+}
+
 interface Recipient { name: string; city: string | null; email: string | null; owner: string | null; opener: string | null; verified: boolean }
 interface ScrapeResult {
   campaignId: string; found: number; inserted: number; withEmail: number; verified: number; recipientCount: number;
@@ -41,7 +55,7 @@ export default function ScrapeSend() {
   /* DMARC authentication summary (deliverability health). */
   const [dmarc, setDmarc] = useState<{ passPct: number | null; totalMessages: number; reports: number } | null>(null);
   /* Daily send-limit status. */
-  const [sendStatus, setSendStatus] = useState<{ sentToday: number; dailyCap: number; remaining: number; capReached: boolean; pending: number } | null>(null);
+  const [sendStatus, setSendStatus] = useState<SendStatus | null>(null);
   /* Lead-pool volume. */
   const [leadStats, setLeadStats] = useState<{ total: number; with_email: number; sendable: number; contacted: number; today: number; week: number; byNiche: { k: string; n: number }[] } | null>(null);
   /* Focus mode: trades that send first (pool keeps everything). */
@@ -52,7 +66,7 @@ export default function ScrapeSend() {
   useEffect(() => { (async () => {
     const r = await api.get<{ summary: { passPct: number | null; totalMessages: number; reports: number } }>('/dmarc/summary');
     if (r.ok && r.data?.summary) setDmarc(r.data.summary);
-    const s = await api.get<{ sentToday: number; dailyCap: number; remaining: number; capReached: boolean; pending: number }>('/send-status');
+    const s = await api.get<SendStatus>('/send-status');
     if (s.ok && s.data) setSendStatus(s.data);
     const ls = await api.get<typeof leadStats>('/leads/stats');
     if (ls.ok && ls.data) setLeadStats(ls.data);
@@ -105,7 +119,7 @@ export default function ScrapeSend() {
       else t.push('error', 'Send failed', r.error);
       return;
     }
-    t.push('success', `Queued ${r.data.recipientCount} — drips within your daily cap`);
+    t.push('success', `Queued ${r.data.recipientCount} — campaign live, sending at prospects’ local mornings`);
     setPhase('sending');
     startPolling(r.data.campaignId);
   };
@@ -209,6 +223,17 @@ export default function ScrapeSend() {
               <strong>{sendStatus.sentToday}/{sendStatus.dailyCap} sent today</strong> · {sendStatus.remaining} left in today’s safe limit{sendStatus.pending > 0 ? ` · ${sendStatus.pending} queued` : ''}.
             </div>
           )
+        )}
+
+        {/* Scheduled-send status — makes the local-timezone timing visible so a staged
+            campaign never looks "stuck". Shows when emails are deferred to local mornings. */}
+        {sendStatus && sendStatus.deferred > 0 && !sendStatus.capReached && (
+          <div className="callout" style={{ marginBottom: 14, borderLeft: '3px solid #2563eb' }}>
+            <strong>📅 {sendStatus.deferred} email{sendStatus.deferred === 1 ? '' : 's'} scheduled</strong> — sending at each prospect’s local business hours (~10am) for the best open rates.{' '}
+            {sendStatus.dueNow > 0 ? `${sendStatus.dueNow} going out now. ` : ''}
+            Next batch: <strong>{formatWhen(sendStatus.scheduledNext)}</strong>.
+            <div className="panel-desc" style={{ marginTop: 4 }}>This is normal, not a delay — your campaign is live and will send automatically. You can close this page.</div>
+          </div>
         )}
 
         {/* Focus mode — which trades send first (pool keeps every trade) */}
@@ -398,9 +423,16 @@ export default function ScrapeSend() {
               ? <>
                   <div className="kv"><span className="k">Sent</span><span className="v" style={{ color: 'var(--accent)' }}>{status.sent} / {status.total}</span></div>
                   {status.failed > 0 && <div className="kv"><span className="k">Failed</span><span className="v" style={{ color: 'var(--danger,#c00)' }}>{status.failed}</span></div>}
-                  <p className="panel-desc" style={{ marginTop: 8 }}>{status.pending === 0 ? 'Done — all messages processed.' : 'Sending drips within your daily cap; you can leave this page.'}</p>
+                  <p className="panel-desc" style={{ marginTop: 8 }}>{
+                    status.pending === 0 ? 'Done — all messages processed.'
+                    : sendStatus && sendStatus.deferred > 0
+                      ? `📅 Scheduled — emails send at each prospect’s local ~10am (next batch ${formatWhen(sendStatus.scheduledNext)}). Your campaign is live; you can close this page.`
+                      : 'Sending now — drips within your daily cap; you can leave this page.'
+                  }</p>
                 </>
-              : <p className="panel-desc">Queued — sending starts within ~15 seconds.</p>}
+              : <p className="panel-desc">{sendStatus && sendStatus.deferred > 0
+                  ? `📅 Queued — campaign is live. Emails send at each prospect’s local business hours (next batch ${formatWhen(sendStatus.scheduledNext)}); you can close this page.`
+                  : 'Queued — sending starts within ~15 seconds.'}</p>}
             <button className="btn btn-secondary btn-sm" style={{ marginTop: 10 }} onClick={reset}>Scrape another batch</button>
           </div>
         )}

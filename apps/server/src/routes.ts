@@ -1206,7 +1206,14 @@ ${r.ok
     const orgId = await singleOrgId();
     const d = (await db.select().from(schema.senderDomains)
       .where(eq(schema.senderDomains.orgId, orgId)).limit(1))[0];
-    const pend = (await db.select({ n: sql<number>`count(*)::int` })
+    /* Pending breakdown: how many are due to send now vs. deferred to a recipient's
+       local morning (the local-timezone timing), plus when the next batch fires. */
+    const pend = (await db.select({
+      n: sql<number>`count(*)::int`,
+      dueNow: sql<number>`count(*) filter (where ${schema.campaignRecipients.nextSendAt} is null or ${schema.campaignRecipients.nextSendAt} <= now())::int`,
+      deferred: sql<number>`count(*) filter (where ${schema.campaignRecipients.nextSendAt} > now())::int`,
+      nextAt: sql<string | null>`to_char(min(${schema.campaignRecipients.nextSendAt}) filter (where ${schema.campaignRecipients.nextSendAt} > now()) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`,
+    })
       .from(schema.campaignRecipients)
       .innerJoin(schema.campaigns, eq(schema.campaigns.id, schema.campaignRecipients.campaignId))
       .where(and(eq(schema.campaigns.status, 'running'), eq(schema.campaignRecipients.state, 'pending'))))[0];
@@ -1234,6 +1241,9 @@ ${r.ok
       warmupDay: d?.warmupDay ?? 0,
       warmupState: d?.warmupState ?? null,
       pending: Number(pend?.n ?? 0),
+      dueNow: Number(pend?.dueNow ?? 0),
+      deferred: Number(pend?.deferred ?? 0),
+      scheduledNext: pend?.nextAt ?? null,   // ISO UTC: when the next deferred batch sends
     };
   });
 
