@@ -22,30 +22,48 @@ const NICHES: Niche[] = [
   'Fencing', 'Concrete', 'Moving', 'Junk Removal', 'Window Cleaning', 'Pressure Washing', 'Solar', 'Flooring',
 ];
 
-/* Cursor over the (niche × metro) grid. Start at a RANDOM cell each process
-   start so frequent restarts/deploys don't keep re-sweeping cell 0 — it explores
-   the whole 4,914-cell space over time, and dedupe makes overlap harmless. */
+/* Two cursors so we can concentrate on focus trades without abandoning the rest:
+   `cursor` walks the full grid, `focusCursor` walks the focus-only grid. Random
+   start so restarts/deploys don't re-sweep cell 0; dedupe makes overlap harmless. */
 let cursor = Math.floor(Math.random() * 1_000_000);
+let focusCursor = Math.floor(Math.random() * 1_000_000);
 
 /* Cells processed per tick — sequential, so they don't pile network/CPU on the
    small machine. With a 2-minute tick that's ~2,000+ cells/day. */
 const CELLS_PER_TICK = 3;
 
+/** The niches discovery should actually sweep: focus trades when set (filtered to
+ *  real niches), else all. Pure for testing. */
+export function effectiveNiches(all: Niche[], focus: string[] | null | undefined): Niche[] {
+  if (!focus || focus.length === 0) return all;
+  const valid = new Set(all as string[]);
+  const picked = focus.filter(f => valid.has(f)) as Niche[];
+  return picked.length > 0 ? picked : all;
+}
+
 export async function tickPoolBuilder(db: Database, log: FastifyBaseLogger): Promise<unknown> {
   const cfg = getConfig();
   if (!cfg.poolBuilder.enabled || cfg.sampleMode) return { skipped: 'disabled' };
-  const org = (await db.select({ id: schema.organizations.id }).from(schema.organizations).limit(1))[0];
+  const org = (await db.select({ id: schema.organizations.id, focusNiches: schema.organizations.focusNiches })
+    .from(schema.organizations).limit(1))[0];
   if (!org) return { skipped: 'no_org' };
 
-  const total = NICHES.length * US_METROS.length;
+  /* Focus trades get most of the tick's cells (fattens those pools fast); when
+     focus is active we still spend the first cell on the full grid so the other
+     trades keep growing slowly and no leads are ever abandoned. */
+  const focus = effectiveNiches(NICHES, org.focusNiches);
+  const focusActive = focus.length < NICHES.length;
+
   let inserted = 0, found = 0, processed = 0;
   const cells: string[] = [];
   for (let i = 0; i < CELLS_PER_TICK; i++) {
-    const idx = cursor % total;
-    cursor++;
+    const useFocus = focusActive && i > 0;
+    const grid = useFocus ? focus : NICHES;
+    const total = grid.length * US_METROS.length;
+    const idx = (useFocus ? focusCursor++ : cursor++) % total;
     /* Interleave niches within each metro so variety builds fast. */
-    const niche = NICHES[idx % NICHES.length]!;
-    const metro = US_METROS[Math.floor(idx / NICHES.length) % US_METROS.length]!;
+    const niche = grid[idx % grid.length]!;
+    const metro = US_METROS[Math.floor(idx / grid.length) % US_METROS.length]!;
     try {
       const r = await runDiscovery(db, {
         orgId: org.id, niche, city: metro.city, state: metro.state, targetCount: 10,
@@ -54,6 +72,7 @@ export async function tickPoolBuilder(db: Database, log: FastifyBaseLogger): Pro
       if (r.inserted > 0) cells.push(`${niche}/${metro.city}+${r.inserted}`);
     } catch { /* one cell failing shouldn't stop the batch */ }
   }
-  if (inserted > 0) log.info({ inserted, found, processed, cells }, 'pool builder');
-  return { inserted, found, processed, cells, total };
+  const total = NICHES.length * US_METROS.length;
+  if (inserted > 0) log.info({ inserted, found, processed, cells, focus: focusActive ? focus : 'all' }, 'pool builder');
+  return { inserted, found, processed, cells, total, focus: focusActive ? focus : null };
 }
