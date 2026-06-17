@@ -11,6 +11,7 @@ import {
 } from '@keres/core';
 import { finalRender, lintEmail } from '@keres/email';
 import { isSendableStatus } from './verify.js';
+import { getFocus, recipientPriority } from './focus.js';
 import { getConfig } from '../config.js';
 import { canSend, type GateInput, type GateResult } from './gates.js';
 
@@ -147,8 +148,9 @@ export async function buildRecipients(db: Database, campaignId: string): Promise
   /* Exclude suppressed (email or domain). */
   const leads = await db.select({
     id: schema.leads.id, email: schema.leads.email, dedupDomain: schema.leads.dedupDomain,
-    status: schema.leads.status, score: schema.leads.score,
+    status: schema.leads.status, score: schema.leads.score, niche: schema.leads.niche,
   }).from(schema.leads).where(inArray(schema.leads.id, audience.leadIds));
+  const focusNiches = await getFocus(db, camp.orgId);
 
   const suppressedEmails = new Set<string>();
   const suppressedDomains = new Set<string>();
@@ -171,6 +173,7 @@ export async function buildRecipients(db: Database, campaignId: string): Promise
     orgId: camp.orgId,
     campaignId,
     leadId: l.id,
+    priority: recipientPriority(l.score, l.niche, focusNiches),
     bucket: (audience.bucketByLeadId[l.id] ?? null) as string | null,
     state: 'pending' as const,
   }));

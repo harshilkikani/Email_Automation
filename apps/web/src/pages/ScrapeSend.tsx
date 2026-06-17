@@ -44,6 +44,9 @@ export default function ScrapeSend() {
   const [sendStatus, setSendStatus] = useState<{ sentToday: number; dailyCap: number; remaining: number; capReached: boolean; pending: number } | null>(null);
   /* Lead-pool volume. */
   const [leadStats, setLeadStats] = useState<{ total: number; with_email: number; sendable: number; contacted: number; today: number; week: number; byNiche: { k: string; n: number }[] } | null>(null);
+  /* Focus mode: trades that send first (pool keeps everything). */
+  const [focus, setFocusState] = useState<string[]>([]);
+  const [showFocus, setShowFocus] = useState(false);
 
   useEffect(() => () => { if (poll.current) window.clearInterval(poll.current); stopRef.current = true; }, []);
   useEffect(() => { (async () => {
@@ -53,7 +56,16 @@ export default function ScrapeSend() {
     if (s.ok && s.data) setSendStatus(s.data);
     const ls = await api.get<typeof leadStats>('/leads/stats');
     if (ls.ok && ls.data) setLeadStats(ls.data);
+    const f = await api.get<{ niches: string[] }>('/focus');
+    if (f.ok && f.data) setFocusState(f.data.niches ?? []);
   })(); }, [phase, status]);
+
+  const toggleFocus = async (niche: string) => {
+    const next = focus.includes(niche) ? focus.filter(n => n !== niche) : [...focus, niche];
+    setFocusState(next);
+    const r = await api.post<{ niches: string[]; repriced: number }>('/focus', { niches: next });
+    if (r.ok && r.data) { setFocusState(r.data.niches); t.push('success', next.length ? `Focusing ${next.length} trade${next.length === 1 ? '' : 's'} — other leads stay in the pool` : 'Focus cleared — best-fit leads send first'); }
+  };
 
   const startPolling = (campaignId: string) => {
     if (poll.current) window.clearInterval(poll.current);
@@ -198,6 +210,28 @@ export default function ScrapeSend() {
             </div>
           )
         )}
+
+        {/* Focus mode — which trades send first (pool keeps every trade) */}
+        <div className="callout" style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span><strong>🎯 Focus{focus.length ? `: ${focus.join(', ')}` : ' off'}</strong> · {focus.length ? 'these trades send first' : 'best-fit leads send first across all trades'}</span>
+            <button className="btn-ghost" style={{ fontSize: 13 }} onClick={() => setShowFocus(v => !v)}>{showFocus ? 'Hide' : 'Change'}</button>
+          </div>
+          {showFocus && (
+            <div style={{ marginTop: 10 }}>
+              <p className="panel-desc" style={{ marginTop: 0, marginBottom: 8 }}>Pick 1–2 trades to prioritize while you find your first clients. <strong>Nothing is lost</strong> — every other metro and trade stays in the pool and sends right after, or whenever you clear the focus.</p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {NICHES.map(n => (
+                  <button key={n} onClick={() => toggleFocus(n)}
+                    className={focus.includes(n) ? 'chip chip-on' : 'chip'}
+                    style={{ padding: '4px 10px', borderRadius: 14, fontSize: 12, cursor: 'pointer', border: '1px solid var(--border, #ccc)', background: focus.includes(n) ? 'var(--accent, #2563eb)' : 'transparent', color: focus.includes(n) ? '#fff' : 'inherit' }}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Step 1 — form */}
         <div className="panel">

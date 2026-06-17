@@ -6,7 +6,7 @@
  * It is intentionally a simple polling loop (not a separate worker process)
  * so the v3.1 single-Fly-machine architecture works without Upstash/BullMQ.
  */
-import { and, eq, sql, asc, inArray, lte, or, isNull } from 'drizzle-orm';
+import { and, eq, sql, asc, desc, inArray, lte, or, isNull } from 'drizzle-orm';
 import type { Database } from '@keres/db';
 import { schema } from '@keres/db';
 import { defaultTemplateFor, renderEmail, pickSignoffName, TEMPLATES, type Template, type CampaignDecision } from '@keres/core';
@@ -116,7 +116,9 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
       eq(schema.campaigns.status, 'running'),
       opts.campaignId ? eq(schema.campaignRecipients.campaignId, opts.campaignId) : sql`true`,
     ))
-    .orderBy(asc(schema.campaignRecipients.id))
+    /* Focus mode: best-fit / focus-trade leads first (priority DESC), then FIFO.
+       Pure ordering — every recipient still sends, just in a smarter order. */
+    .orderBy(desc(schema.campaignRecipients.priority), asc(schema.campaignRecipients.id))
     .limit(opts.maxToSend);
 
   /* Pre-fetch all campaigns, leads, orgs, and signals to eliminate N+1 queries. */

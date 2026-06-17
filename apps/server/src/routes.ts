@@ -17,6 +17,7 @@ import { runDiscovery } from './services/discovery.js';
 import { quickScrape, quickFromLicenses, quickStatus, quickSweep, quickGet, quickPoolStage, stageValidationOffer, US_METROS } from './services/quick.js';
 import { enrichOwnersViaHunter } from './services/owner-enrich.js';
 import { tickReverify } from './services/reverify.js';
+import { getFocus, setFocus } from './services/focus.js';
 import {
   createCampaign, buildRecipients, renderPreview,
 } from './services/campaigns.js';
@@ -455,6 +456,21 @@ export function registerRoutes(app: FastifyInstance) {
     }
     await writeAudit('repersonalize', orgId, { regenerated, skipped, total: ids.length }, req);
     return { ok: true, regenerated, skipped, total: ids.length };
+  });
+
+  /* Focus mode: which trades to send to FIRST. Empty = best-score-first across
+     all trades. Pure prioritization — no lead is ever excluded from the pool. */
+  app.get('/api/focus', async () => {
+    const orgId = await singleOrgId();
+    return { ok: true, niches: await getFocus(getDb(), orgId) };
+  });
+  app.post('/api/focus', async (req) => {
+    const orgId = await singleOrgId();
+    const b = (req.body ?? {}) as { niches?: string[] };
+    const niches = Array.isArray(b.niches) ? b.niches.filter(n => typeof n === 'string') : [];
+    const r = await setFocus(getDb(), orgId, niches);
+    await writeAudit('set_focus', orgId, r as Record<string, unknown>, req);
+    return { ok: true, ...r };
   });
 
   /* Re-verify a batch of the existing pool now (catch dead/catch-all mailboxes

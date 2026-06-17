@@ -40,6 +40,8 @@ export const organizations = pgTable('organizations', {
   defaultBookingLink: text('default_booking_link'),
   productionAccessConfirmed: boolean('production_access_confirmed').notNull().default(false),
   budgetMode: text('budget_mode').notNull().default('free'),
+  /* Focus mode: trades to send to FIRST. Empty = send best-score leads first across all trades. */
+  focusNiches: text('focus_niches').array().notNull().default(sql`'{}'::text[]`),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => ({
@@ -286,6 +288,8 @@ export const campaignRecipients = pgTable('campaign_recipients', {
   orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
   campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }),
   leadId: uuid('lead_id').notNull().references(() => leads.id, { onDelete: 'cascade' }),
+  /* Send-order priority (higher first): focus-trade boost + lead score. Focus mode. */
+  priority: integer('priority').notNull().default(0),
   bucket: text('bucket'),                                    // top|mid|bottom|control|seedlist
   state: text('state').notNull().default('pending'),         // pending|queued|sent|delivered|bounced|complained|replied|skipped|failed
   /** Which sequence touch this recipient is on (1 = first email). */
