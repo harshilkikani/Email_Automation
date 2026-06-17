@@ -40,15 +40,27 @@ export const STATE_TZ: Record<string, string> = {
 export const DEFAULT_TZ = 'America/Chicago';
 
 export interface LocalTimingOpts {
-  openHour: number;    // earliest acceptable local send hour (inclusive)
-  closeHour: number;   // latest acceptable local send hour (exclusive)
-  targetHour: number;  // when deferring, aim for this local hour (peak ~10am)
+  openHour: number;          // earliest acceptable local send hour (inclusive)
+  closeHour: number;         // latest acceptable local send hour (exclusive)
+  morningStartHour: number;  // deferred sends spread from here (local)…
+  morningWindowMin: number;  // …across this many minutes (e.g. 120 = 9:00–11:00)
   skipWeekends: boolean;
 }
 
+/* Research-backed (2026): the peak window is ~9:30–11:30 local, and firing a whole
+   batch at one exact time (:00) is a bulk/automation signal that hurts deliverability.
+   So deferred sends spread deterministically across a 9:00–11:00 window — each
+   recipient lands on its own minute (stable per recipient, never all at once). */
 export const DEFAULT_LOCAL_TIMING: LocalTimingOpts = {
-  openHour: 9, closeHour: 17, targetHour: 10, skipWeekends: true,
+  openHour: 9, closeHour: 17, morningStartHour: 9, morningWindowMin: 120, skipWeekends: true,
 };
+
+/** Stable per-recipient minute offset within the window (so it's spread, not bunched). */
+function jitterMinutes(seed: string, windowMin: number): number {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) { h ^= seed.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return Math.abs(h) % Math.max(1, windowMin);
+}
 
 const DOW: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
@@ -84,6 +96,7 @@ const isWeekend = (dow: number) => dow === 0 || dow === 6;
 export function localSendDeferral(
   now: Date,
   state: string | null | undefined,
+  seed = '',
   opts: LocalTimingOpts = DEFAULT_LOCAL_TIMING,
 ): Date | null {
   const tz = STATE_TZ[(state ?? '').trim().toUpperCase()] ?? DEFAULT_TZ;
@@ -104,16 +117,21 @@ export function localSendDeferral(
     while (opts.skipWeekends && isWeekend((p.dow + addDays) % 7)) addDays++;
   }
 
-  /* Convert "local targetHour on (today + addDays)" to a UTC instant by applying
-     the timezone offset observed at `now`. Across a DST flip the target may land
-     ±1h off — acceptable for a morning send. */
+  /* Spread the target across the morning window on its own minute (per-recipient,
+     stable) so a batch never fires at one exact time. Convert the local wall time
+     to a UTC instant via the offset observed at `now`. Across a DST flip the target
+     may land ±1h off — acceptable for a morning send. */
   const localWallMs = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
   const nowFloorMs = Math.floor(now.getTime() / 60000) * 60000;
   const offsetMs = localWallMs - nowFloorMs;
 
+  const mins = jitterMinutes(seed, opts.morningWindowMin);
+  const targetHour = opts.morningStartHour + Math.floor(mins / 60);
+  const targetMin = mins % 60;
+
   const base = new Date(Date.UTC(p.year, p.month - 1, p.day));
   base.setUTCDate(base.getUTCDate() + addDays);
-  const targetWallMs = Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), opts.targetHour, 0);
+  const targetWallMs = Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), targetHour, targetMin);
   const target = new Date(targetWallMs - offsetMs);
 
   /* Never return a time in the past (e.g. clock-skew edge): fall back to send-now. */

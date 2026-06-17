@@ -176,7 +176,7 @@ export async function sendBatch(db: Database, opts: SendBatchOptions): Promise<{
        when it's actually morning for them rather than whenever UTC the batch
        fires. Skips this tick; nextSendAt gates the re-pick. */
     if (cfg.localSendTiming.enabled) {
-      const localDefer = localSendDeferral(wallNow, lead.state);
+      const localDefer = localSendDeferral(wallNow, lead.state, lead.id);
       if (localDefer && localDefer.getTime() > wallNow.getTime()) {
         await db.update(schema.campaignRecipients)
           .set({ nextSendAt: localDefer })
