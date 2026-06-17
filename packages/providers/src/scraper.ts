@@ -3,9 +3,33 @@
  * extraction from /contact + /about. Plain HTML only — no JS execution.
  */
 import { request } from 'undici';
+import { lookup } from 'node:dns/promises';
 import * as cheerio from 'cheerio';
 import type { WebPresenceLevel } from '@keres/core';
 import { emailIntakeFilter } from '@keres/core';
+
+/** Per-request hard cap (connect + headers + body). Dead servers fail fast. */
+const FETCH_TIMEOUT_MS = 6_000;
+
+function hostnameOf(url: string): string | null {
+  try { return new URL(url).hostname; } catch { return null; }
+}
+
+/** Quick DNS check so we skip non-resolving domains entirely instead of eating
+ *  multiple multi-second fetch timeouts on them (~a third of scraped sites are dead). */
+async function domainResolves(hostname: string, timeoutMs = 2_500): Promise<boolean> {
+  try {
+    await Promise.race([
+      lookup(hostname),
+      new Promise<never>((_, rej) => { const t = setTimeout(() => rej(new Error('dns_timeout')), timeoutMs); t.unref?.(); }),
+    ]);
+    return true;
+  } catch (e) {
+    /* Only treat a definitive resolution failure as dead. On an ambiguous timeout,
+       proceed and let the capped fetch decide — never false-skip a valid domain. */
+    return (e as Error)?.message === 'dns_timeout';
+  }
+}
 
 export interface ProbeResult {
   webPresenceLevel: WebPresenceLevel;
@@ -34,6 +58,14 @@ export class Scraper {
       };
     }
     const url = normalizeUrl(website);
+    const host = hostnameOf(url);
+    /* Skip dead domains up front (no real fetcher only — tests inject their own). */
+    if (host && !this.cfg.fetcher && !(await domainResolves(host))) {
+      return {
+        webPresenceLevel: 'none', emails: [], hasOnlineBooking: false, deadDomain: true,
+        evidence: { url, reason: 'dns_unresolved' },
+      };
+    }
     const fetcher = this.cfg.fetcher ?? this.realFetch.bind(this);
     try {
       const home = await fetcher(url);
@@ -81,6 +113,9 @@ export class Scraper {
    */
   async deepCrawl(website: string | null | undefined, paths: string[] = Scraper.PEOPLE_PATHS, maxPages = 4): Promise<{ emails: string[]; text: string; pages: number }> {
     if (!website || !this.isEnabled()) return { emails: [], text: '', pages: 0 };
+    /* Bail on non-resolving domains before spending any fetch budget. */
+    const host0 = hostnameOf(normalizeUrl(website));
+    if (host0 && !this.cfg.fetcher && !(await domainResolves(host0))) return { emails: [], text: '', pages: 0 };
     const fetcher = this.cfg.fetcher ?? this.realFetch.bind(this);
     const emails = new Set<string>();
     let text = '';
@@ -115,8 +150,9 @@ export class Scraper {
       method: 'GET',
       maxRedirections: 4,
       headers: { 'User-Agent': this.cfg.userAgent ?? 'KeresAI/0.1' },
-      headersTimeout: 8_000,
-      bodyTimeout: 10_000,
+      headersTimeout: 5_000,
+      bodyTimeout: FETCH_TIMEOUT_MS,
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),   // hard total cap incl. connect
     });
     const html = await res.body.text();
     return { status: res.statusCode, html, finalUrl: url };
