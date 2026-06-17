@@ -19,6 +19,7 @@ export type DeficiencyCode =
   | 'stale_site'
   | 'few_reviews'
   | 'no_reviews'
+  | 'low_rating'
   | 'by_appointment'
   | 'no_contact_email';
 
@@ -77,6 +78,17 @@ export function deriveDeficiencies(intel: IntelFacts, signals: SignalFacts, nowY
       code: 'gbp_only',
       fact: 'shows up only on a Google listing, with no website to capture leads',
       fix: "we'd build a simple site that captures the leads your Google listing is already sending you",
+    });
+  }
+
+  /* Low star rating — a strong, concrete, addressable signal: customers filter by
+     stars, so a low rating directly costs jobs, and review automation fixes it. */
+  const rating = signals.reviewRating;
+  if (rating !== null && rating > 0 && rating < 4.0) {
+    out.push({
+      code: 'low_rating',
+      fact: `is sitting at ${rating.toFixed(1)} stars on Google`,
+      fix: "we'd set up automated review requests so your happy customers pull that rating up — most of the jobs you're losing are going to the higher-rated shop",
     });
   }
 

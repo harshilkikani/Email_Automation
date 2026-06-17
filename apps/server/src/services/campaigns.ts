@@ -159,6 +159,11 @@ export async function buildRecipients(db: Database, campaignId: string): Promise
     status: schema.leads.status, score: schema.leads.score, niche: schema.leads.niche,
   }).from(schema.leads).where(inArray(schema.leads.id, audience.leadIds));
   const focusNiches = await getFocus(db, camp.orgId);
+  /* Leads where personalization found a concrete, addressable gap → signal-anchored
+     opener → higher reply rate, so they get a send-priority boost. */
+  const sigRows = await db.select({ leadId: schema.leadSignals.leadId, fact: schema.leadSignals.personalizationFact })
+    .from(schema.leadSignals).where(inArray(schema.leadSignals.leadId, audience.leadIds));
+  const signalLeads = new Set(sigRows.filter(r => r.fact && r.fact !== 'generic').map(r => r.leadId));
 
   const suppressedEmails = new Set<string>();
   const suppressedDomains = new Set<string>();
@@ -181,7 +186,7 @@ export async function buildRecipients(db: Database, campaignId: string): Promise
     orgId: camp.orgId,
     campaignId,
     leadId: l.id,
-    priority: recipientPriority(l.score, l.niche, focusNiches),
+    priority: recipientPriority(l.score, l.niche, focusNiches, signalLeads.has(l.id)),
     bucket: (audience.bucketByLeadId[l.id] ?? null) as string | null,
     state: 'pending' as const,
   }));
